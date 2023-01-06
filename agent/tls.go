@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -143,10 +145,7 @@ func buildCert(caCert *x509.Certificate, caKey *rsa.PrivateKey, subject *pkix.Na
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 	}
 
-	certKey, err := rsa.GenerateKey(rand.Reader, 4096)
-	if err != nil {
-		return nil, fmt.Errorf("generating cert private key: %w", err)
-	}
+	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &c, caCert, &certKey.PublicKey, caKey)
 	if err != nil {
@@ -161,9 +160,13 @@ func buildCert(caCert *x509.Certificate, caKey *rsa.PrivateKey, subject *pkix.Na
 		return nil, errors.New("unable to encode certificate to PEM")
 	}
 
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(certKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling pkcs8: %w", err)
+	}
 	certKeyPEMBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(certKey),
+		Type:  "PRIVATE KEY",
+		Bytes: keyBytes,
 	})
 
 	return &Cert{
