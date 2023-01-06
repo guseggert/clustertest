@@ -150,7 +150,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 			return nil, fmt.Errorf("starting container %q: %w", containerID, err)
 		}
 
-		agentClient, err := agent.NewClient(c.Cert, "127.0.0.1", hostPort)
+		agentClient, err := agent.NewClient(c.Cert, "127.0.0.1", hostPort, agent.WithClientWaitInterval(10*time.Millisecond))
 		if err != nil {
 			return nil, fmt.Errorf("building nodeagent client: %w", err)
 		}

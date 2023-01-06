@@ -25,9 +25,25 @@ type Client struct {
 	baseURL         string
 	httpClient      *http.Client
 	commandClient   *command.Client
+
+	waitInterval time.Duration
 }
 
-func NewClient(cert *Certs, ipAddr string, port int) (*Client, error) {
+type ClientOption func(c *Client)
+
+func WithClientWaitInterval(d time.Duration) ClientOption {
+	return func(c *Client) {
+		c.waitInterval = d
+	}
+}
+
+func WithClientLogger(l *zap.Logger) ClientOption {
+	return func(c *Client) {
+		c.Logger = l.Named("nodeagentclient").Sugar()
+	}
+}
+
+func NewClient(cert *Certs, ipAddr string, port int, opts ...ClientOption) (*Client, error) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	httpDialAddrPort := fmt.Sprintf("%s:%d", ipAddr, port)
 
@@ -61,8 +77,8 @@ func NewClient(cert *Certs, ipAddr string, port int) (*Client, error) {
 	baseURL := fmt.Sprintf("https://nodeagent:%d", port)
 	commandURL := baseURL + "/command"
 
-	return &Client{
-		Logger:          logger.Named("nodegaentclient").Sugar(),
+	c := &Client{
+		Logger:          logger.Named("nodeagentclient").Sugar(),
 		host:            "nodeagent",
 		baseURL:         baseURL,
 		httpClient:      httpClient,
@@ -73,7 +89,14 @@ func NewClient(cert *Certs, ipAddr string, port int) (*Client, error) {
 			URL:        commandURL,
 			Logger:     logger.Named("command_client").Sugar(),
 		},
-	}, nil
+		waitInterval: 100 * time.Millisecond,
+	}
+
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	return c, nil
 }
 
 func (c *Client) prepReq(r *http.Request) {
@@ -174,7 +197,7 @@ func (c *Client) DialContext(ctx context.Context, network, addr string) (net.Con
 }
 
 func (c *Client) WaitForServer(ctx context.Context) error {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(c.waitInterval)
 	defer ticker.Stop()
 	for {
 		select {
