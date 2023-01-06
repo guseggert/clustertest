@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -47,12 +48,33 @@ type BasicNode struct {
 	node Node
 }
 
+// Run runs the given command on the node and returns a function that waits for the exit code.
 func (n *BasicNode) Run(ctx context.Context, req RunRequest) (RunResultWaiter, error) {
 	return n.node.Run(ctx, req)
 }
 
+// RunWait runs the given command on the node and waits for it to finish, returning its exit code.
+func (n *BasicNode) RunWait(ctx context.Context, req RunRequest) (int, error) {
+	wait, err := n.node.Run(ctx, req)
+	if err != nil {
+		return -1, err
+	}
+	code, err := wait(ctx)
+	if code != 0 {
+		return -1, fmt.Errorf("non-zero exit code %d: %w", code, err)
+	}
+	return code, nil
+}
+
 func (n *BasicNode) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
 	return n.node.SendFile(ctx, SendFileRequest{FilePath: filePath, Contents: contents})
+}
+
+func (n *BasicNode) RootDir() string {
+	if rootDirer, ok := n.node.(interface{ RootDir() string }); ok {
+		return rootDirer.RootDir()
+	}
+	return "/"
 }
 
 func (n *BasicNode) Stop(ctx context.Context) error {

@@ -15,6 +15,7 @@ import (
 type node struct {
 	ID  int
 	Env map[string]string
+	Dir string
 }
 
 type result struct {
@@ -30,6 +31,7 @@ func (n *node) Run(ctx context.Context, req clusteriface.RunRequest) (clusterifa
 	cmd.Stdin = req.Stdin
 	cmd.Stdout = req.Stdout
 	cmd.Stderr = req.Stderr
+	cmd.Dir = req.WD
 
 	err := cmd.Start()
 	if err != nil {
@@ -40,7 +42,7 @@ func (n *node) Run(ctx context.Context, req clusteriface.RunRequest) (clusterifa
 	resultChan := make(chan result, 1)
 	procExitedChan := make(chan struct{})
 	go func() {
-		exitCode := -1
+		exitCode := 0
 		var resultErr error
 
 		err := cmd.Wait()
@@ -50,6 +52,7 @@ func (n *node) Run(ctx context.Context, req clusteriface.RunRequest) (clusterifa
 				exitCode = exitErr.ExitCode()
 			} else {
 				resultErr = err
+				exitCode = -1
 			}
 		}
 		select {
@@ -97,7 +100,7 @@ func (n *node) SendFile(ctx context.Context, req clusteriface.SendFileRequest) e
 }
 
 func (n *node) Connect(ctx context.Context, req clusteriface.ConnectRequest) (net.Conn, error) {
-	return nil, nil
+	return net.Dial(req.Network, req.Addr)
 }
 
 func (n *node) Stop(ctx context.Context) error {
@@ -106,4 +109,8 @@ func (n *node) Stop(ctx context.Context) error {
 
 func (n *node) String() string {
 	return fmt.Sprintf("local node id=%d", n.ID)
+}
+
+func (n *node) RootDir() string {
+	return n.Dir
 }

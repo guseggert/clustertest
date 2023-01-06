@@ -5,13 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"syscall"
+	"path/filepath"
+	"strconv"
 
-	"github.com/google/uuid"
 	clusteriface "github.com/guseggert/clustertest/cluster"
 	"github.com/guseggert/clustertest/internal/files"
-	"github.com/guseggert/clustertest/internal/net"
 )
 
 // Cluster is a local Cluster that runs processes directly on the underlying host.
@@ -21,18 +19,21 @@ import (
 // The main benefit from using this is performance, since there are no external processes or resources to create for launching nodes.
 // The performance makes this suitable for fast-feedback unit tests.
 type Cluster struct {
-	dir            string
-	nodes          []*node
-	env            map[string]string
-	nodeAgentToken string
+	dir   string
+	nodes []*node
+	env   map[string]string
 }
 
 type Option func(c *Cluster)
 
-func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
-	token := uuid.New().String()
+func NewCluster(opts ...Option) (*Cluster, error) {
+	dir, err := os.MkdirTemp("", "")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp dir: %w", err)
+	}
+	fmt.Printf("using dir: %s\n", dir)
 	return &Cluster{
-		nodeAgentToken: token,
+		dir: dir,
 	}, nil
 }
 
@@ -51,25 +52,17 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 	var newNodes []clusteriface.Node
 	for i := 0; i < n; i++ {
 		id := startID + i
+		nodeDir := filepath.Join(c.dir, strconv.Itoa(id))
 
-		port, err := net.GetEphemeralTCPPort()
+		err := os.Mkdir(nodeDir, 0777)
 		if err != nil {
-			return nil, fmt.Errorf("acquiring ephemeral port: %w", err)
-		}
-
-		cmd := exec.Command(
-			nodeAgentBin,
-			"--tls-cert",
-			"--on-heartbeat-failure", "exit",
-			"--listen-addr", fmt.Sprintf("127.0.0.1:%d", port),
-		)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Cloneflags: syscall.CLONE_NEWNS,
+			return nil, fmt.Errorf("creating dir for node %d: %w", id, err)
 		}
 
 		node := &node{
 			ID:  id,
 			Env: map[string]string{},
+			Dir: nodeDir,
 		}
 
 		newNodes = append(newNodes, node)
@@ -79,5 +72,11 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 }
 
 func (c *Cluster) Cleanup(ctx context.Context) error {
-	return nil
+	for _, node := range c.nodes {
+		err := node.Stop(ctx)
+		if err != nil {
+			return fmt.Errorf("stopping node %d: %w", node.ID, err)
+		}
+	}
+	return os.RemoveAll(c.dir)
 }
