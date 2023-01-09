@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/guseggert/clustertest/agent/command"
+	"github.com/guseggert/clustertest/agent/process"
 	"github.com/julienschmidt/httprouter"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -37,7 +37,7 @@ type NodeAgent struct {
 	listenAddr              string
 
 	httpServer    *http.Server
-	commandServer *command.Server
+	commandServer *process.Server
 
 	closed        chan struct{}
 	heartbeatMut  sync.Mutex
@@ -98,7 +98,7 @@ func NewNodeAgent(caCertPEM, certPEM, keyPEM []byte, opts ...Option) (*NodeAgent
 	}
 	n := &NodeAgent{
 		logger:           logger.Named("nodeagent").Sugar(),
-		commandServer:    &command.Server{Log: logger.Named("command_server").Sugar()},
+		commandServer:    &process.Server{Log: logger.Named("command_server").Sugar()},
 		caCertPEM:        caCertPEM,
 		certPEM:          certPEM,
 		keyPEM:           keyPEM,

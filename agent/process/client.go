@@ -1,4 +1,4 @@
-package command
+package process
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process,
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	runner := &clientCommandRunner{
+	runner := &clientProcRunner{
 		conn:   wsConn,
 		log:    c.Logger.Named("command_runner"),
 		ctx:    ctx,
@@ -72,7 +72,7 @@ func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process,
 	return runner.run()
 }
 
-type clientCommandRunner struct {
+type clientProcRunner struct {
 	log    *zap.SugaredLogger
 	conn   *websocket.Conn
 	ctx    context.Context
@@ -93,12 +93,12 @@ type clientCommandRunner struct {
 	closeConnOnce sync.Once
 }
 
-func (r *clientCommandRunner) shutdown() {
+func (r *clientProcRunner) shutdown() {
 	r.cancel()
 	r.wg.Wait()
 }
 
-func (r *clientCommandRunner) run() (*Process, error) {
+func (r *clientProcRunner) run() (*Process, error) {
 	r.wg.Add(2)
 	go r.readStderr()
 	go r.readStdout()
@@ -133,7 +133,7 @@ func (r *clientCommandRunner) run() (*Process, error) {
 
 }
 
-func (r *clientCommandRunner) close(code websocket.StatusCode, reason string) {
+func (r *clientProcRunner) close(code websocket.StatusCode, reason string) {
 	r.closeConnOnce.Do(func() {
 		err := r.conn.Close(code, reason)
 		if err != nil {
@@ -142,7 +142,7 @@ func (r *clientCommandRunner) close(code websocket.StatusCode, reason string) {
 	})
 }
 
-func (r *clientCommandRunner) readMessages() {
+func (r *clientProcRunner) readMessages() {
 	defer r.shutdown()
 	defer r.wg.Done()
 
@@ -177,7 +177,7 @@ func (r *clientCommandRunner) readMessages() {
 	// If there's a lot of output, then that sucks. We can probably add client options
 	// to tell the server how much, if any, of the output the client cares about, so the server knows how much to buffer.
 	for {
-		var msg commandResponseMessage
+		var msg procResponseMessage
 		err := wsjson.Read(r.ctx, r.conn, &msg)
 		if websocket.CloseStatus(err) != -1 {
 			r.resultCh <- cmdResult{code: -1, err: fmt.Errorf("conn unexpectedly closed: %w", err)}
@@ -211,8 +211,8 @@ func (r *clientCommandRunner) readMessages() {
 	}
 }
 
-func (r *clientCommandRunner) writeFirstMessage() error {
-	return wsjson.Write(r.ctx, r.conn, commandRequestMessage{
+func (r *clientProcRunner) writeFirstMessage() error {
+	return wsjson.Write(r.ctx, r.conn, procRequestMessage{
 		Command: r.req.Command,
 		Args:    r.req.Args,
 		Env:     r.req.Env,
@@ -220,17 +220,17 @@ func (r *clientCommandRunner) writeFirstMessage() error {
 	})
 }
 
-func (r *clientCommandRunner) writeStdin() {
+func (r *clientProcRunner) writeStdin() {
 	defer r.wg.Done()
 	writer := &wsJSONWriter{
 		log:  r.log.Named("stdin_writer"),
 		ctx:  r.ctx,
 		conn: r.conn,
 		writeMsg: func(b []byte) any {
-			return commandRequestMessage{Stdin: b}
+			return procRequestMessage{Stdin: b}
 		},
 		closeMsg: func() any {
-			return commandRequestMessage{StdinDone: true}
+			return procRequestMessage{StdinDone: true}
 		},
 	}
 	defer writer.Close()
@@ -244,7 +244,7 @@ func (r *clientCommandRunner) writeStdin() {
 	r.log.Debugw("done copying stdin", "Error", err)
 }
 
-func (r *clientCommandRunner) readStdout() {
+func (r *clientProcRunner) readStdout() {
 	defer r.wg.Done()
 	defer func() {
 		if closer, ok := r.stdout.(io.Closer); ok {
@@ -260,7 +260,7 @@ func (r *clientCommandRunner) readStdout() {
 	}
 }
 
-func (r *clientCommandRunner) readStderr() {
+func (r *clientProcRunner) readStderr() {
 	defer r.wg.Done()
 	defer func() {
 		if closer, ok := r.stderr.(io.Closer); ok {

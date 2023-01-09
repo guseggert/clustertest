@@ -1,4 +1,4 @@
-package command
+package process
 
 import (
 	"context"
@@ -31,7 +31,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	runner := &serverCommandRunner{
+	runner := &serverProcRunner{
 		log:     s.Log.Named("server_runner"),
 		conn:    wsConn,
 		ctx:     ctx,
@@ -41,7 +41,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	runner.run()
 }
 
-type serverCommandRunner struct {
+type serverProcRunner struct {
 	log    *zap.SugaredLogger
 	conn   *websocket.Conn
 	ctx    context.Context
@@ -60,7 +60,7 @@ type serverCommandRunner struct {
 	closeConnOnce sync.Once
 }
 
-func (r *serverCommandRunner) shutdown() {
+func (r *serverProcRunner) shutdown() {
 	if r.cmd.Process != nil {
 		r.cmd.Process.Kill()
 	}
@@ -68,7 +68,7 @@ func (r *serverCommandRunner) shutdown() {
 	r.wg.Wait()
 }
 
-func (r *serverCommandRunner) run() {
+func (r *serverProcRunner) run() {
 	// read the first message
 	err := r.readFirstMessageAndStart()
 	if err != nil {
@@ -87,7 +87,7 @@ func (r *serverCommandRunner) run() {
 	r.wg.Wait()
 }
 
-func (r *serverCommandRunner) close(code websocket.StatusCode, reason string) {
+func (r *serverProcRunner) close(code websocket.StatusCode, reason string) {
 	r.closeConnOnce.Do(func() {
 		err := r.conn.Close(code, reason)
 		if err != nil {
@@ -96,14 +96,14 @@ func (r *serverCommandRunner) close(code websocket.StatusCode, reason string) {
 	})
 }
 
-func (r *serverCommandRunner) readMessages() {
+func (r *serverProcRunner) readMessages() {
 	defer r.shutdown()
 	defer r.wg.Done()
 
 	closedStdin := false
 
 	for {
-		var msg commandRequestMessage
+		var msg procRequestMessage
 		err := wsjson.Read(r.ctx, r.conn, &msg)
 		if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
 			r.log.Debug("got normal closure from client, wrapping up")
@@ -130,7 +130,7 @@ func (r *serverCommandRunner) readMessages() {
 	}
 }
 
-func (r *serverCommandRunner) waitAndWriteResult() {
+func (r *serverProcRunner) waitAndWriteResult() {
 	defer r.wg.Done()
 
 	err := r.cmd.Wait()
@@ -142,7 +142,7 @@ func (r *serverCommandRunner) waitAndWriteResult() {
 		}
 	}
 
-	err = wsjson.Write(r.ctx, r.conn, commandResponseMessage{
+	err = wsjson.Write(r.ctx, r.conn, procResponseMessage{
 		Exited:   true,
 		ExitCode: exitCode,
 	})
@@ -151,8 +151,8 @@ func (r *serverCommandRunner) waitAndWriteResult() {
 	}
 }
 
-func (r *serverCommandRunner) readFirstMessageAndStart() error {
-	var req commandRequestMessage
+func (r *serverProcRunner) readFirstMessageAndStart() error {
+	var req procRequestMessage
 	err := wsjson.Read(r.ctx, r.conn, &req)
 	if err != nil {
 		return err
@@ -170,7 +170,7 @@ func (r *serverCommandRunner) readFirstMessageAndStart() error {
 		ctx:  r.ctx,
 		conn: r.conn,
 		writeMsg: func(b []byte) any {
-			return commandResponseMessage{Stderr: b}
+			return procResponseMessage{Stderr: b}
 		},
 	}
 
@@ -179,7 +179,7 @@ func (r *serverCommandRunner) readFirstMessageAndStart() error {
 		ctx:  r.ctx,
 		conn: r.conn,
 		writeMsg: func(b []byte) any {
-			return commandResponseMessage{Stdout: b}
+			return procResponseMessage{Stdout: b}
 		},
 	}
 
@@ -192,7 +192,7 @@ func (r *serverCommandRunner) readFirstMessageAndStart() error {
 	return cmd.Start()
 }
 
-func (r *serverCommandRunner) readStdin() {
+func (r *serverProcRunner) readStdin() {
 	defer r.wg.Done()
 	defer r.stdin.Close()
 	for b := range r.stdinCh {

@@ -11,7 +11,7 @@ import (
 	"path"
 	"time"
 
-	"github.com/guseggert/clustertest/agent/command"
+	"github.com/guseggert/clustertest/agent/process"
 	clusteriface "github.com/guseggert/clustertest/cluster"
 	"go.uber.org/zap"
 	"nhooyr.io/websocket"
@@ -25,7 +25,7 @@ type Client struct {
 	dialCtx         func(ctx context.Context, network, addr string) (net.Conn, error)
 	baseURL         string
 	httpClient      *http.Client
-	commandClient   *command.Client
+	commandClient   *process.Client
 
 	waitInterval time.Duration
 }
@@ -79,7 +79,7 @@ func NewClient(log *zap.SugaredLogger, certs *Certs, ipAddr string, port int, op
 		httpClient:      httpClient,
 		tlsClientConfig: tlsConfig,
 		dialCtx:         dialCtx,
-		commandClient: &command.Client{
+		commandClient: &process.Client{
 			HTTPClient: httpClient,
 			URL:        commandURL,
 			Logger:     log.Named("nodeagent_command_client"),
@@ -188,7 +188,7 @@ func (c *Client) ReadFile(ctx context.Context, filePath string) (io.ReadCloser, 
 }
 
 func (c *Client) StartProc(ctx context.Context, runReq clusteriface.StartProcRequest) (clusteriface.Process, error) {
-	return c.commandClient.StartProc(ctx, command.StartProcRequest{
+	return c.commandClient.StartProc(ctx, process.StartProcRequest{
 		Command: runReq.Command,
 		Args:    runReq.Args,
 		Env:     runReq.Env,

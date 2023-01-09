@@ -1,9 +1,9 @@
-package command
+package process
 
-// commandRequestMessage is a request message.
+// procRequestMessage is a request message.
 // Only the first message needs to contain the command, args, env, wd, etc.
 // Subsequent messages can contain only stdin bytes, for streaming stdin.
-type commandRequestMessage struct {
+type procRequestMessage struct {
 	Stdin     []byte
 	StdinDone bool
 
@@ -16,13 +16,10 @@ type commandRequestMessage struct {
 	WD      string
 }
 
-// commandResponseMessage is a command response message.
+// procResponseMessage is a command response message.
 // Only the last message of the stream will contain process exit information.
 // Messages before the last may contain stdout or stderr bytes.
-type commandResponseMessage struct {
-	// PID is the PID of the process. This must be in the first response message.
-	PID int
-
+type procResponseMessage struct {
 	Stdout     []byte
 	StdoutDone bool
 
@@ -32,6 +29,4 @@ type commandResponseMessage struct {
 	// Exited is true if the process exited. ExitCode must be provided in that case.
 	Exited   bool
 	ExitCode int
-
-	Err string
 }
