@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 
 	"github.com/docker/docker/api/types"
@@ -36,12 +37,16 @@ func (n *node) runEnv(reqEnv map[string]string) []string {
 	return env
 }
 
-func (n *node) Run(ctx context.Context, req clusteriface.RunRequest) (clusteriface.RunResultWaiter, error) {
-	return n.agentClient.Run(ctx, req)
+func (n *node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
+	return n.agentClient.StartProc(ctx, req)
 }
 
-func (n *node) SendFile(ctx context.Context, req clusteriface.SendFileRequest) error {
-	return n.agentClient.SendFile(ctx, req)
+func (n *node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
+	return n.agentClient.SendFile(ctx, filePath, contents)
+}
+
+func (n *node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	return n.agentClient.ReadFile(ctx, path)
 }
 
 func (n *node) Stop(ctx context.Context) error {
@@ -55,8 +60,8 @@ func (n *node) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (n *node) Connect(ctx context.Context, req clusteriface.ConnectRequest) (net.Conn, error) {
-	return n.agentClient.DialContext(ctx, req.Network, req.Addr)
+func (n *node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	return n.agentClient.DialContext(ctx, network, addr)
 }
 
 func (n *node) String() string {

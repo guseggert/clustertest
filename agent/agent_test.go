@@ -14,10 +14,24 @@ import (
 	"github.com/guseggert/clustertest/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
+var (
+	log *zap.SugaredLogger
+)
+
+func init() {
+	l, err := zap.NewProduction()
+	if err != nil {
+		panic(err)
+	}
+
+	log = l.Sugar()
+}
+
 func TestPostFile(t *testing.T) {
-	cert, err := GenerateCert()
+	cert, err := GenerateCerts()
 	require.NoError(t, err)
 	agent, err := NewNodeAgent(
 		cert.CA.CertPEMBytes,
@@ -32,21 +46,20 @@ func TestPostFile(t *testing.T) {
 		require.NoError(t, agent.Stop())
 	}()
 
-	client, err := NewClient(cert, "127.0.0.1", 9998)
+	client, err := NewClient(log, cert, "127.0.0.1", 9998)
 	require.NoError(t, err)
 
 	err = client.WaitForServer(context.Background())
 	require.NoError(t, err)
 
-	req := cluster.SendFileRequest{FilePath: "/tmp/hello", Contents: bytes.NewBuffer([]byte("y helo thar"))}
-	err = client.SendFile(context.Background(), req)
+	err = client.SendFile(context.Background(), "/tmp/hello", bytes.NewBuffer([]byte("hello")))
 	require.NoError(t, err)
 }
 
 func TestConnect(t *testing.T) {
 	ctx := context.Background()
 
-	cert, err := GenerateCert()
+	cert, err := GenerateCerts()
 	require.NoError(t, err)
 
 	agent, err := NewNodeAgent(
@@ -72,7 +85,7 @@ func TestConnect(t *testing.T) {
 	addrPort, err := netip.ParseAddrPort(u.Host)
 	require.NoError(t, err)
 
-	client, err := NewClient(cert, "127.0.0.1", 9998)
+	client, err := NewClient(log, cert, "127.0.0.1", 9998)
 	require.NoError(t, err)
 
 	err = client.WaitForServer(ctx)
@@ -100,7 +113,7 @@ func TestConnect(t *testing.T) {
 func TestCommand(t *testing.T) {
 	ctx := context.Background()
 
-	cert, err := GenerateCert()
+	cert, err := GenerateCerts()
 	require.NoError(t, err)
 
 	agent, err := NewNodeAgent(
@@ -116,7 +129,7 @@ func TestCommand(t *testing.T) {
 		require.NoError(t, agent.Stop())
 	}()
 
-	client, err := NewClient(cert, "127.0.0.1", 9998)
+	client, err := NewClient(log, cert, "127.0.0.1", 9998)
 	require.NoError(t, err)
 
 	err = client.WaitForServer(ctx)
@@ -164,28 +177,28 @@ func TestCommand(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			runReq := cluster.RunRequest{
+			req := cluster.StartProcRequest{
 				Command: c.cmd,
 				Args:    c.args,
 			}
 
 			var stdoutBuf bytes.Buffer
 			if c.expStdout != "" {
-				runReq.Stdout = &noopWriteCloser{Writer: &stdoutBuf}
+				req.Stdout = &noopWriteCloser{Writer: &stdoutBuf}
 			}
 			var stderrBuf bytes.Buffer
 			if c.expStderr != "" {
-				runReq.Stderr = &noopWriteCloser{Writer: &stderrBuf}
+				req.Stderr = &noopWriteCloser{Writer: &stderrBuf}
 			}
 
 			if c.stdin != "" {
-				runReq.Stdin = bytes.NewReader([]byte(c.stdin))
+				req.Stdin = bytes.NewReader([]byte(c.stdin))
 			}
 
-			wait, err := client.Run(ctx, runReq)
+			proc, err := client.StartProc(ctx, req)
 			require.NoError(t, err)
 
-			exitCode, err := wait(ctx)
+			exitCode, err := proc.Wait(ctx)
 			require.NoError(t, err)
 
 			assert.Equal(t, 0, exitCode)

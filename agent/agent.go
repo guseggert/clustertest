@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -78,7 +77,7 @@ func WithLogLevel(l zapcore.Level) Option {
 }
 
 func HeartbeatFailureShutdown() {
-	log.Println("heartbeat failed, shutting down")
+	fmt.Println("heartbeat failed, shutting down")
 	cmd := exec.Command("shutdown", "now")
 	err := cmd.Run()
 	if err != nil {
@@ -87,7 +86,7 @@ func HeartbeatFailureShutdown() {
 }
 
 func HeartbeatFailureExit() {
-	log.Println("heartbeat failed, exiting")
+	fmt.Println("heartbeat failed, exiting")
 	os.Exit(1)
 }
 
@@ -159,6 +158,7 @@ func (a *NodeAgent) runHTTPServer() error {
 	router.GET("/command", a.commandWS)
 	router.POST("/command", a.command)
 	router.POST("/file/*path", a.postFile)
+	router.GET("/file/*path", a.readFile)
 	router.GET("/connect/:network/:addr", a.connect)
 
 	server := http.Server{Handler: router}
@@ -243,6 +243,24 @@ func (a *NodeAgent) postFile(w http.ResponseWriter, r *http.Request, params http
 
 	w.WriteHeader(http.StatusOK)
 }
+func (a *NodeAgent) readFile(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+	path := params.ByName("path")
+
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "no such file or directory", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	_, err = io.Copy(w, f)
+	if err != nil {
+		a.logger.Debugf("error sending file response: %s", err)
+	}
+}
 
 func (a *NodeAgent) heartbeat(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	a.heartbeatMut.Lock()
@@ -256,7 +274,7 @@ func (a *NodeAgent) heartbeat(w http.ResponseWriter, r *http.Request, params htt
 	}
 	b, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("error marshaling heartbeat response: %s", err)
+		a.logger.Debugf("error marshaling heartbeat response: %s", err)
 	}
 	w.Header().Add("Content-Type", "application/json")
 	w.Write(b)

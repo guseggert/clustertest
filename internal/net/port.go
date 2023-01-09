@@ -5,6 +5,8 @@ import (
 	"net"
 )
 
+// GetEphemeralTCPPort returns a port in the ephemeral range that is likely free.
+// This is obviously racy but is very unlikely to fail as long as you bind the port ASAP.
 func GetEphemeralTCPPort() (int, error) {
 	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
 	if err != nil {

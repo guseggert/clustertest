@@ -18,7 +18,7 @@ type Client struct {
 	Logger     *zap.SugaredLogger
 }
 
-type RunRequest struct {
+type StartProcRequest struct {
 	Command string
 	Args    []string
 	Env     []string
@@ -28,11 +28,13 @@ type RunRequest struct {
 	Stderr  io.Writer
 }
 
-type RunResult struct {
-	Code int
+type Process struct {
+	wait func(ctx context.Context) (int, error)
 }
 
-func (c *Client) Run(ctx context.Context, req RunRequest) (func(context.Context) (*RunResult, error), error) {
+func (p *Process) Wait(ctx context.Context) (int, error) { return p.wait(ctx) }
+
+func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process, error) {
 	c.Logger.Debugw("dialing WebSocket for run", "URL", c.URL)
 	wsConn, _, err := websocket.Dial(ctx, c.URL, &websocket.DialOptions{
 		HTTPClient:      c.HTTPClient,
@@ -75,7 +77,7 @@ type clientCommandRunner struct {
 	conn   *websocket.Conn
 	ctx    context.Context
 	cancel func()
-	req    RunRequest
+	req    StartProcRequest
 
 	stderr io.Writer
 	stdout io.Writer
@@ -96,7 +98,7 @@ func (r *clientCommandRunner) shutdown() {
 	r.wg.Wait()
 }
 
-func (r *clientCommandRunner) run() (func(context.Context) (*RunResult, error), error) {
+func (r *clientCommandRunner) run() (*Process, error) {
 	r.wg.Add(2)
 	go r.readStderr()
 	go r.readStdout()
@@ -111,22 +113,24 @@ func (r *clientCommandRunner) run() (func(context.Context) (*RunResult, error), 
 	go r.writeStdin()
 	go r.readMessages()
 
-	return func(ctx context.Context) (*RunResult, error) {
-		select {
-		case res := <-r.resultCh:
-			r.log.Debugf("got exit code %d with err: %s", res.code, res.err)
-			return &RunResult{Code: res.code}, res.err
-		case <-ctx.Done():
-			err := ctx.Err()
-			r.log.Debugf("wait context done: %s", err)
-			return nil, err
-		case <-r.ctx.Done():
-			err := r.ctx.Err()
-			r.log.Debugf("runResult context done: %s", err)
-			return nil, err
-		}
-
+	return &Process{
+		wait: func(ctx context.Context) (int, error) {
+			select {
+			case res := <-r.resultCh:
+				r.log.Debugf("got exit code %d with err: %s", res.code, res.err)
+				return res.code, res.err
+			case <-ctx.Done():
+				err := ctx.Err()
+				r.log.Debugf("wait context done: %s", err)
+				return -1, err
+			case <-r.ctx.Done():
+				err := r.ctx.Err()
+				r.log.Debugf("runResult context done: %s", err)
+				return -1, err
+			}
+		},
 	}, nil
+
 }
 
 func (r *clientCommandRunner) close(code websocket.StatusCode, reason string) {
@@ -143,7 +147,25 @@ func (r *clientCommandRunner) readMessages() {
 	defer r.wg.Done()
 
 	closedStdout := false
+	var closeStdoutOnce sync.Once
+	closeStdout := func() {
+		closeStdoutOnce.Do(func() {
+			closedStdout = true
+			close(r.stdoutCh)
+		})
+	}
+
 	closedStderr := false
+	var closeStderrOnce sync.Once
+	closeStderr := func() {
+		closeStderrOnce.Do(func() {
+			closedStderr = true
+			close(r.stderrCh)
+		})
+	}
+
+	defer closeStderr()
+	defer closeStdout()
 
 	// The client always initiates the close when it decides that it's done.
 	// Some important notes:
@@ -158,7 +180,6 @@ func (r *clientCommandRunner) readMessages() {
 		var msg commandResponseMessage
 		err := wsjson.Read(r.ctx, r.conn, &msg)
 		if websocket.CloseStatus(err) != -1 {
-			// this should not happen, as the client should initiate the close
 			r.resultCh <- cmdResult{code: -1, err: fmt.Errorf("conn unexpectedly closed: %w", err)}
 			close(r.stderrCh)
 			close(r.stdoutCh)
@@ -167,35 +188,23 @@ func (r *clientCommandRunner) readMessages() {
 		if err != nil {
 			r.log.Debugf("message reader got error: %s", err)
 			r.resultCh <- cmdResult{err: err}
-			close(r.stderrCh)
-			close(r.stdoutCh)
 			r.close(websocket.StatusInternalError, err.Error())
 			return
 		}
 		if len(msg.Stderr) > 0 && !closedStderr {
 			r.stderrCh <- msg.Stderr
 		}
-		if msg.StderrDone && !closedStderr {
-			close(r.stderrCh)
-			closedStderr = true
+		if msg.StderrDone {
+			closeStderr()
 		}
 		if len(msg.Stdout) > 0 && !closedStdout {
 			r.stdoutCh <- msg.Stdout
 		}
 		if msg.StdoutDone && !closedStdout {
-			close(r.stdoutCh)
-			closedStdout = true
+			closeStdout()
 		}
 		if msg.Exited {
 			r.resultCh <- cmdResult{code: msg.ExitCode}
-			// This can only happen when stdout and stderr have been read to completion,
-			// so it's safe to close them (if they haven't already been closed).
-			if !closedStderr {
-				close(r.stderrCh)
-			}
-			if !closedStdout {
-				close(r.stdoutCh)
-			}
 			r.close(websocket.StatusNormalClosure, "")
 			return
 		}

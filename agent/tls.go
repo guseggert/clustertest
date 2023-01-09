@@ -177,8 +177,8 @@ func buildCert(caCert *x509.Certificate, caKey *rsa.PrivateKey, subject *pkix.Na
 	}, nil
 }
 
-// GenerateCert generates a self-signed TLS certificate to use for encrypting agent traffic.
-func GenerateCert() (*Certs, error) {
+// GenerateCerts generates TLS CA certs and client & server certs to use for agent traffic.
+func GenerateCerts() (*Certs, error) {
 	caSubject := pkix.Name{CommonName: "ClustertestCA"}
 	caCert, err := buildCACert(&caSubject)
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	clusteriface "github.com/guseggert/clustertest/cluster"
 	"github.com/guseggert/clustertest/internal/files"
 	"github.com/guseggert/clustertest/internal/net"
+	"go.uber.org/zap"
 )
 
 const chars = "abcefghijklmnopqrstuvwxyz0123456789"
@@ -40,6 +41,8 @@ func randString(n int) string {
 // The underlying host must have a Docker daemon running.
 // This supports standard environment variables for configuring the Docker client (DOCKER_HOST etc.).
 type Cluster struct {
+	Log *zap.SugaredLogger
+
 	Cert            *agent.Certs
 	BaseImage       string
 	ContainerPrefix string
@@ -51,21 +54,39 @@ type Cluster struct {
 
 type Option func(c *Cluster)
 
+func WithLogger(l *zap.SugaredLogger) Option {
+	return func(c *Cluster) {
+		c.Log = l.Named("docker_cluster")
+	}
+}
+
 func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
+	log, err := zap.NewProduction()
+	if err != nil {
+		return nil, fmt.Errorf("instantiating default logger: %w", err)
+	}
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("building Docker client: %w", err)
 	}
-	cert, err := agent.GenerateCert()
+	cert, err := agent.GenerateCerts()
 	if err != nil {
 		return nil, fmt.Errorf("generating TLS cert: %w", err)
 	}
-	return &Cluster{
+	c := &Cluster{
 		Cert:            cert,
 		BaseImage:       baseImage,
 		DockerClient:    dockerClient,
 		ContainerPrefix: randString(6),
-	}, nil
+	}
+
+	WithLogger(log.Sugar())(c)
+
+	for _, o := range opts {
+		o(c)
+	}
+
+	return c, nil
 }
 
 func (c *Cluster) ensureImagePulled(ctx context.Context) error {
@@ -150,7 +171,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 			return nil, fmt.Errorf("starting container %q: %w", containerID, err)
 		}
 
-		agentClient, err := agent.NewClient(c.Cert, "127.0.0.1", hostPort, agent.WithClientWaitInterval(10*time.Millisecond))
+		agentClient, err := agent.NewClient(c.Log, c.Cert, "127.0.0.1", hostPort, agent.WithClientWaitInterval(10*time.Millisecond))
 		if err != nil {
 			return nil, fmt.Errorf("building nodeagent client: %w", err)
 		}

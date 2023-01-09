@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 )
 
+// FindUp searches up the filesystem hierarchy starting at dir, for a file with the given name, returning an empty string if none is found.
 func FindUp(name, dir string) string {
 	curDir := dir
 	for {

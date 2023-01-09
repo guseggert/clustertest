@@ -6,35 +6,36 @@ import (
 	"net"
 )
 
-type RunResultWaiter func(context.Context) (int, error)
+type Process interface {
+	// Wait waits for the process to exit and returns its exit code.
+	Wait(context.Context) (int, error)
+}
 
-type RunRequest struct {
+type StartProcRequest struct {
 	Command string
 	Args    []string
-	Env     []string
-	WD      string
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
-}
-
-type ConnectRequest struct {
-	Network string
-	Addr    string
-}
-
-type SendFileRequest struct {
-	FilePath string
-	Contents io.Reader
+	// Env is the environment variables of the process, in the form "k=v".
+	// If unspecified, the environment variables to use are implementation-defined.
+	Env []string
+	// WD is the working directory of the process.
+	// If unspecified, this is implementation-defined.
+	WD string
+	// Stdin is a reader which, when specified, is sent to the process's stdin.
+	Stdin io.Reader
+	// Stdout is a writer which, when specified, receives the stdout of the process.
+	Stdout io.Writer
+	// Stderr is a writer which, when specified, receives the stderr of the process.
+	Stderr io.Writer
 }
 
 // Node is generally a host or container, and is a member of a cluster.
 // The implementation defines how to coordinate the node.
 type Node interface {
-	Run(ctx context.Context, req RunRequest) (RunResultWaiter, error)
-	SendFile(ctx context.Context, req SendFileRequest) error
+	StartProc(ctx context.Context, req StartProcRequest) (Process, error)
+	SendFile(ctx context.Context, filePath string, Contents io.Reader) error
+	ReadFile(ctx context.Context, path string) (io.ReadCloser, error)
 	Stop(ctx context.Context) error
-	Connect(ctx context.Context, req ConnectRequest) (net.Conn, error)
+	Dial(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 type Nodes []Node

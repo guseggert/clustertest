@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path"
 	"time"
 
@@ -43,7 +44,7 @@ func WithClientLogger(l *zap.Logger) ClientOption {
 	}
 }
 
-func NewClient(cert *Certs, ipAddr string, port int, opts ...ClientOption) (*Client, error) {
+func NewClient(log *zap.SugaredLogger, certs *Certs, ipAddr string, port int, opts ...ClientOption) (*Client, error) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	httpDialAddrPort := fmt.Sprintf("%s:%d", ipAddr, port)
 
@@ -56,15 +57,9 @@ func NewClient(cert *Certs, ipAddr string, port int, opts ...ClientOption) (*Cli
 		return dialer.DialContext(ctx, "tcp", httpDialAddrPort)
 	}
 
-	tlsConfig, err := ClientTLSConfig(cert.CA.CertPEMBytes, cert.Client.CertPEMBytes, cert.Client.KeyPEMBytes)
+	tlsConfig, err := ClientTLSConfig(certs.CA.CertPEMBytes, certs.Client.CertPEMBytes, certs.Client.KeyPEMBytes)
 	if err != nil {
 		return nil, fmt.Errorf("building client TLS config: %w", err)
-	}
-
-	loggerCfg := zap.NewDevelopmentConfig()
-	logger, err := loggerCfg.Build()
-	if err != nil {
-		return nil, fmt.Errorf("building logger: %w", err)
 	}
 
 	httpClient := &http.Client{
@@ -78,7 +73,7 @@ func NewClient(cert *Certs, ipAddr string, port int, opts ...ClientOption) (*Cli
 	commandURL := baseURL + "/command"
 
 	c := &Client{
-		Logger:          logger.Named("nodeagentclient").Sugar(),
+		Logger:          log.Named("nodeagent_client"),
 		host:            "nodeagent",
 		baseURL:         baseURL,
 		httpClient:      httpClient,
@@ -87,7 +82,7 @@ func NewClient(cert *Certs, ipAddr string, port int, opts ...ClientOption) (*Cli
 		commandClient: &command.Client{
 			HTTPClient: httpClient,
 			URL:        commandURL,
-			Logger:     logger.Named("command_client").Sugar(),
+			Logger:     log.Named("nodeagent_command_client"),
 		},
 		waitInterval: 100 * time.Millisecond,
 	}
@@ -129,12 +124,12 @@ func (c *Client) SendHeartbeat(ctx context.Context) error {
 
 }
 
-func (c *Client) SendFile(ctx context.Context, sendReq clusteriface.SendFileRequest) error {
-	urlPath := path.Join("/file", sendReq.FilePath)
+func (c *Client) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
+	urlPath := path.Join("/file", filePath)
 	u := c.baseURL + urlPath
-	httpReq, err := http.NewRequest(http.MethodPost, u, sendReq.Contents)
+	httpReq, err := http.NewRequest(http.MethodPost, u, contents)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("building request: %w", err)
 	}
 
 	c.prepReq(httpReq)
@@ -159,8 +154,41 @@ func (c *Client) SendFile(ctx context.Context, sendReq clusteriface.SendFileRequ
 	return nil
 }
 
-func (c *Client) Run(ctx context.Context, runReq clusteriface.RunRequest) (clusteriface.RunResultWaiter, error) {
-	wait, err := c.commandClient.Run(ctx, command.RunRequest{
+// ReadFile reads a file from the remote node, returning io.ErrNotExist if it is not found.
+func (c *Client) ReadFile(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	urlPath := path.Join("/file", filePath)
+	u := c.baseURL + urlPath
+	httpReq, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building request: %w", err)
+	}
+
+	c.prepReq(httpReq)
+
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("reading file over HTTP: %w", err)
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		defer httpResp.Body.Close()
+		if httpResp.StatusCode == http.StatusNotFound {
+			return nil, os.ErrNotExist
+		}
+		var body string
+		b, err := io.ReadAll(httpResp.Body)
+		if err != nil {
+			body = fmt.Errorf("error reading body: %w", err).Error()
+		} else {
+			body = string(b)
+		}
+		return nil, fmt.Errorf("non-200 HTTP status code %d received when reading file: %s", httpResp.StatusCode, body)
+	}
+
+	return httpResp.Body, nil
+}
+
+func (c *Client) StartProc(ctx context.Context, runReq clusteriface.StartProcRequest) (clusteriface.Process, error) {
+	return c.commandClient.StartProc(ctx, command.StartProcRequest{
 		Command: runReq.Command,
 		Args:    runReq.Args,
 		Env:     runReq.Env,
@@ -169,13 +197,6 @@ func (c *Client) Run(ctx context.Context, runReq clusteriface.RunRequest) (clust
 		Stdout:  runReq.Stdout,
 		Stderr:  runReq.Stderr,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return func(ctx context.Context) (int, error) {
-		res, err := wait(ctx)
-		return res.Code, err
-	}, nil
 }
 
 // Dial establishes a connection to the given address, using the node as a proxy.

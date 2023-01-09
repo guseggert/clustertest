@@ -24,6 +24,7 @@ import (
 	"github.com/guseggert/clustertest/agent"
 	clusteriface "github.com/guseggert/clustertest/cluster"
 	"github.com/guseggert/clustertest/internal/files"
+	"go.uber.org/zap"
 )
 
 const userDataTemplate = `#!/bin/bash
@@ -41,6 +42,7 @@ nohup ./nodeagent \
 `
 
 type Cluster struct {
+	Log                     *zap.SugaredLogger
 	InstanceProfileARN      string
 	InstanceSecurityGroupID string
 	InstanceType            string
@@ -94,6 +96,12 @@ func WithRunInstancesInput(f func(input *ec2.RunInstancesInput) error) Option {
 	}
 }
 
+func WithLogger(l *zap.SugaredLogger) Option {
+	return func(c *Cluster) {
+		c.Log = l.Named("ec2_cluster")
+	}
+}
+
 // provideFileViaS3 uploads the file at the path to S3 with a random key, and returns the key.
 func provideFileViaS3(sess *session.Session, bucket, path string) (string, error) {
 	s3Client := s3.New(sess)
@@ -125,6 +133,11 @@ func provideFileViaS3(sess *session.Session, bucket, path string) (string, error
 	return key, nil
 }
 
+// NewCluster creates a new AWS cluster.
+// This uses standard AWS profile env vars.
+// With no configuration, this uses the default profile.
+// The user/role used must have the appropriate permissions for the test runner,
+// in order to find the resources in the account and launch/destroy EC2 instances.
 func NewCluster(opts ...Option) (*Cluster, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -162,9 +175,14 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 		return nil, fmt.Errorf("fetching AMI ID: %w", err)
 	}
 
-	cert, err := agent.GenerateCert()
+	cert, err := agent.GenerateCerts()
 	if err != nil {
 		return nil, fmt.Errorf("generating cert: %w", err)
+	}
+
+	log, err := zap.NewProduction()
+	if err != nil {
+		return nil, fmt.Errorf("instantiating default logger: %w", err)
 	}
 
 	c := &Cluster{
@@ -182,6 +200,8 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 		NodeAgentS3Bucket:       outputs.s3Bucket,
 		Cert:                    cert,
 	}
+
+	WithLogger(log.Sugar())(c)
 
 	for _, o := range opts {
 		o(c)
@@ -303,7 +323,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 	var ifaceNodes clusteriface.Nodes
 	var nodes []*node
 	for _, inst := range instances {
-		nodeAgentClient, err := agent.NewClient(c.Cert, *inst.PublicIpAddress, 8080)
+		nodeAgentClient, err := agent.NewClient(c.Log, c.Cert, *inst.PublicIpAddress, 8080)
 		if err != nil {
 			return nil, fmt.Errorf("constructing node agent client: %w", err)
 		}

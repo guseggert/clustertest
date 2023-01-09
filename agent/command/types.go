@@ -20,12 +20,16 @@ type commandRequestMessage struct {
 // Only the last message of the stream will contain process exit information.
 // Messages before the last may contain stdout or stderr bytes.
 type commandResponseMessage struct {
+	// PID is the PID of the process. This must be in the first response message.
+	PID int
+
 	Stdout     []byte
 	StdoutDone bool
 
 	Stderr     []byte
 	StderrDone bool
 
+	// Exited is true if the process exited. ExitCode must be provided in that case.
 	Exited   bool
 	ExitCode int
 

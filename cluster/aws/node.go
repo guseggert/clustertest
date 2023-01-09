@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -26,20 +27,24 @@ type node struct {
 	stopHeartbeat     chan struct{}
 }
 
-func (n *node) Run(ctx context.Context, req clusteriface.RunRequest) (clusteriface.RunResultWaiter, error) {
-	return n.agentClient.Run(ctx, req)
+func (n *node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
+	return n.agentClient.StartProc(ctx, req)
 }
 
-func (n *node) SendFile(ctx context.Context, req clusteriface.SendFileRequest) error {
-	return n.agentClient.SendFile(ctx, req)
+func (n *node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
+	return n.agentClient.SendFile(ctx, filePath, contents)
+}
+
+func (n *node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	return n.agentClient.ReadFile(ctx, path)
 }
 
 func (n *node) Heartbeat(ctx context.Context) error {
 	return n.agentClient.SendHeartbeat(ctx)
 }
 
-func (n *node) Connect(ctx context.Context, req clusteriface.ConnectRequest) (net.Conn, error) {
-	return n.agentClient.DialContext(ctx, req.Network, req.Addr)
+func (n *node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	return n.agentClient.DialContext(ctx, network, addr)
 }
 
 func (n *node) StartHeartbeat() {

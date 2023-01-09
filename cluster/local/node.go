@@ -23,7 +23,13 @@ type result struct {
 	err  error
 }
 
-func (n *node) Run(ctx context.Context, req clusteriface.RunRequest) (clusteriface.RunResultWaiter, error) {
+type proc struct {
+	wait func(context.Context) (int, error)
+}
+
+func (p *proc) Wait(ctx context.Context) (int, error) { return p.wait(ctx) }
+
+func (n *node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
 	cmd := exec.Command(req.Command, req.Args...)
 	if len(req.Env) > 0 {
 		cmd.Env = append(os.Environ(), req.Env...)
@@ -72,35 +78,41 @@ func (n *node) Run(ctx context.Context, req clusteriface.RunRequest) (clusterifa
 		}
 	}()
 
-	return func(ctx context.Context) (int, error) {
-		select {
-		case <-ctx.Done():
-			return -1, ctx.Err()
-		case res := <-resultChan:
-			return res.code, res.err
-		}
+	return &proc{
+		wait: func(ctx context.Context) (int, error) {
+			select {
+			case <-ctx.Done():
+				return -1, ctx.Err()
+			case res := <-resultChan:
+				return res.code, res.err
+			}
+		},
 	}, nil
 }
 
-func (n *node) SendFile(ctx context.Context, req clusteriface.SendFileRequest) error {
-	dir := filepath.Dir(req.FilePath)
+func (n *node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
+	dir := filepath.Dir(filePath)
 	err := os.MkdirAll(dir, 0777)
 	if err != nil {
 		return fmt.Errorf("making intermediate dirs: %w", err)
 	}
 
-	f, err := os.Create(req.FilePath)
+	f, err := os.Create(filePath)
 	if err != nil {
-		return fmt.Errorf("creating file %q: %w", req.FilePath, err)
+		return fmt.Errorf("creating file %q: %w", filePath, err)
 	}
 
-	_, err = io.Copy(f, req.Contents)
+	_, err = io.Copy(f, contents)
 
 	return err
 }
 
-func (n *node) Connect(ctx context.Context, req clusteriface.ConnectRequest) (net.Conn, error) {
-	return net.Dial(req.Network, req.Addr)
+func (n *node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	return os.Open(path)
+}
+
+func (n *node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	return net.Dial(network, addr)
 }
 
 func (n *node) Stop(ctx context.Context) error {

@@ -31,7 +31,6 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
 	}
-	fmt.Printf("using dir: %s\n", dir)
 	return &Cluster{
 		dir: dir,
 	}, nil
