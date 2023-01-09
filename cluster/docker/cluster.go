@@ -40,7 +40,7 @@ func randString(n int) string {
 // This supports standard environment variables for configuring the Docker client (DOCKER_HOST etc.).
 type Cluster struct {
 	Log             *zap.SugaredLogger
-	Cert            *agent.Certs
+	Certs           *agent.Certs
 	NodeAgentBin    string
 	BaseImage       string
 	ContainerPrefix string
@@ -81,7 +81,7 @@ func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
 		return nil, fmt.Errorf("generating TLS cert: %w", err)
 	}
 	c := &Cluster{
-		Cert:            cert,
+		Certs:           cert,
 		BaseImage:       baseImage,
 		DockerClient:    dockerClient,
 		ContainerPrefix: randString(6),
@@ -141,9 +141,9 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 			return nil, fmt.Errorf("acquiring ephemeral port: %w", err)
 		}
 
-		caCertPEMEncoded := base64.StdEncoding.EncodeToString(c.Cert.CA.CertPEMBytes)
-		certPEMEncoded := base64.StdEncoding.EncodeToString(c.Cert.Server.CertPEMBytes)
-		keyPEMEncoded := base64.StdEncoding.EncodeToString(c.Cert.Server.KeyPEMBytes)
+		caCertPEMEncoded := base64.StdEncoding.EncodeToString(c.Certs.CA.CertPEMBytes)
+		certPEMEncoded := base64.StdEncoding.EncodeToString(c.Certs.Server.CertPEMBytes)
+		keyPEMEncoded := base64.StdEncoding.EncodeToString(c.Certs.Server.KeyPEMBytes)
 
 		createResp, err := c.DockerClient.ContainerCreate(
 			ctx,
@@ -177,7 +177,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 			return nil, fmt.Errorf("starting container %q: %w", containerID, err)
 		}
 
-		agentClient, err := agent.NewClient(c.Log, c.Cert, "127.0.0.1", hostPort, agent.WithClientWaitInterval(10*time.Millisecond))
+		agentClient, err := agent.NewClient(c.Log, c.Certs, "127.0.0.1", hostPort, agent.WithClientWaitInterval(100*time.Millisecond))
 		if err != nil {
 			return nil, fmt.Errorf("building nodeagent client: %w", err)
 		}
