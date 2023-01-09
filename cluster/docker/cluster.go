@@ -203,5 +203,11 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 }
 
 func (c *Cluster) Cleanup(ctx context.Context) error {
+	for _, n := range c.Nodes {
+		err := c.DockerClient.ContainerStop(ctx, n.ContainerID, nil)
+		if err != nil {
+			return fmt.Errorf("stopping node %d: %w", n.ID, err)
+		}
+	}
 	return nil
 }
