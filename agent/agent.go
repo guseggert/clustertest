@@ -161,15 +161,33 @@ func (a *NodeAgent) runHTTPServer() error {
 	router.GET("/file/*path", a.readFile)
 	router.GET("/connect/:network/:addr", a.connect)
 
-	server := http.Server{Handler: router}
+	handler := a.logHandler(router)
+
+	server := http.Server{Handler: handler}
 	a.httpServer = &server
 
 	err = server.Serve(tlsListener)
 	if errors.Is(err, http.ErrServerClosed) {
+		a.logger.Info("server closed gracefully")
 		return nil
 	}
+	a.logger.Infof("server closed abnormally: %s", err)
 
 	return err
+}
+
+func (a *NodeAgent) logHandler(h http.Handler) http.Handler {
+	fn := func(w http.ResponseWriter, r *http.Request) {
+		a.logger.Debugw(
+			"received request",
+			"Time", time.Now(),
+			"URL", r.URL,
+			"Method", r.Method,
+		)
+
+		h.ServeHTTP(w, r)
+	}
+	return http.HandlerFunc(fn)
 }
 
 // Run runs the node agent and returns once the node agent has stopped.
