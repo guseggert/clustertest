@@ -3,12 +3,10 @@ package docker
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 
-	"os"
 	"strconv"
 	"time"
 
@@ -41,13 +39,14 @@ func randString(n int) string {
 // The underlying host must have a Docker daemon running.
 // This supports standard environment variables for configuring the Docker client (DOCKER_HOST etc.).
 type Cluster struct {
-	Log *zap.SugaredLogger
-
+	Log             *zap.SugaredLogger
 	Cert            *agent.Certs
+	NodeAgentBin    string
 	BaseImage       string
 	ContainerPrefix string
 	DockerClient    *client.Client
-	Nodes           []*node
+
+	Nodes []*node
 
 	imagePulled bool
 }
@@ -60,6 +59,14 @@ func WithLogger(l *zap.SugaredLogger) Option {
 	}
 }
 
+func WithNodeAgentBin(p string) Option {
+	return func(c *Cluster) {
+		c.NodeAgentBin = p
+	}
+}
+
+// NewCluster creates a new local Docker cluster.
+// By default, this looks for the node agent binary by searching up from PWD for a "nodeagent" file.
 func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
 	log, err := zap.NewProduction()
 	if err != nil {
@@ -86,6 +93,14 @@ func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
 		o(c)
 	}
 
+	if c.NodeAgentBin == "" {
+		nab, err := files.FindNodeAgentBin()
+		if err != nil {
+			return nil, fmt.Errorf("finding node agent bin: %w", err)
+		}
+		c.NodeAgentBin = nab
+	}
+
 	return c, nil
 }
 
@@ -110,16 +125,7 @@ func (c *Cluster) ensureImagePulled(ctx context.Context) error {
 }
 
 func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("getting wd: %w", err)
-	}
-	nodeAgentBin := files.FindUp("nodeagent", wd)
-	if nodeAgentBin == "" {
-		return nil, errors.New("unable to find nodeagent bin")
-	}
-
-	err = c.ensureImagePulled(ctx)
+	err := c.ensureImagePulled(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("pulling image: %w", err)
 	}
@@ -153,7 +159,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 				ExposedPorts: nat.PortSet{"8080": struct{}{}},
 			},
 			&container.HostConfig{
-				Binds:        []string{fmt.Sprintf("%s:/nodeagent", nodeAgentBin)},
+				Binds:        []string{fmt.Sprintf("%s:/nodeagent", c.NodeAgentBin)},
 				PortBindings: nat.PortMap{"8080": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: strconv.Itoa(hostPort)}}},
 			},
 			nil,

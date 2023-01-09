@@ -1,6 +1,8 @@
 package files
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -24,4 +26,16 @@ func FindUp(name, dir string) string {
 		}
 		curDir = newDir
 	}
+}
+
+func FindNodeAgentBin() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting wd: %w", err)
+	}
+	nodeAgentBin := FindUp("nodeagent", wd)
+	if nodeAgentBin == "" {
+		return "", errors.New("unable to find nodeagent bin")
+	}
+	return nodeAgentBin, nil
 }

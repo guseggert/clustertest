@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -138,16 +137,9 @@ func provideFileViaS3(sess *session.Session, bucket, path string) (string, error
 // With no configuration, this uses the default profile.
 // The user/role used must have the appropriate permissions for the test runner,
 // in order to find the resources in the account and launch/destroy EC2 instances.
+//
+// By default, this looks for the node agent binary by searching up from PWD for a "nodeagent" file.
 func NewCluster(opts ...Option) (*Cluster, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("getting wd: %w", err)
-	}
-	nodeAgentBin := files.FindUp("nodeagent", wd)
-	if nodeAgentBin == "" {
-		return nil, errors.New("unable to find nodeagent bin")
-	}
-
 	sess, err := session.NewSessionWithOptions(session.Options{SharedConfigState: session.SharedConfigEnable})
 	if err != nil {
 		return nil, fmt.Errorf("creating AWS Go SDK session: %w", err)
@@ -161,12 +153,6 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 	outputs, err := parseStackOutputs(outputsMap)
 	if err != nil {
 		return nil, fmt.Errorf("parsing stack outputs: %w", err)
-	}
-
-	// upload the node agent to S3
-	nodeFilesKey, err := provideFileViaS3(sess, outputs.s3Bucket, nodeAgentBin)
-	if err != nil {
-		return nil, fmt.Errorf("uploading node agent to S3: %w", err)
 	}
 
 	// TODO: allow pinning the AMI ID
@@ -195,8 +181,6 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 		EC2Client:               ec2.New(sess),
 		S3Client:                s3.New(sess),
 		InstanceType:            "t3.nano",
-		NodeAgentBin:            nodeAgentBin,
-		NodeAgentS3Key:          nodeFilesKey,
 		NodeAgentS3Bucket:       outputs.s3Bucket,
 		Cert:                    cert,
 	}
@@ -206,6 +190,21 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 	for _, o := range opts {
 		o(c)
 	}
+
+	if c.NodeAgentBin == "" {
+		nab, err := files.FindNodeAgentBin()
+		if err != nil {
+			return nil, fmt.Errorf("finding node agent bin: %w", err)
+		}
+		c.NodeAgentBin = nab
+	}
+
+	// upload the node agent to S3
+	nodeFilesKey, err := provideFileViaS3(sess, outputs.s3Bucket, c.NodeAgentBin)
+	if err != nil {
+		return nil, fmt.Errorf("uploading node agent to S3: %w", err)
+	}
+	c.NodeAgentS3Key = nodeFilesKey
 
 	return c, nil
 }
