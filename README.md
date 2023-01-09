@@ -19,7 +19,59 @@ Because implementations are interchangeable, you can write and run your test cod
 Clustertest also works naturally with standard test frameworks, tooling, IDE integration, etc.
 
 # Getting Started
-Look in the `examples` directory for examples of tests using clustertest.
+Here is a basic clustertest test, using the Go test framework:
+
+```
+func TestHelloWorld(t *testing.T) {
+	ctx := context.Background()
+
+	// use the "local" implementation
+	clusterImpl, _ := local.NewCluster()
+
+	// setup a BasicCluster which has a much richer API than barebones clusters
+	cluster, _ := cluster.New(clusterImpl)
+
+	// destroy the nodes and cluster after the test
+	t.Cleanup(func() { cluster.Cleanup(ctx) })
+
+	// create a new node
+	node, _ := c.NewNode(ctx)
+
+	// determine the file path, which may differ depending on the implementation
+	path := filepath.Join(node.RootDir(), "hello")
+
+	// send a file to the node
+	node.SendFile(ctx, path, bytes.NewBuffer([]byte("Hello, world!")))
+
+	// cat the file and verify stdout
+	stdout := &bytes.Buffer{}
+	proc, _ := node.StartProc(ctx, cluster.StartProcRequest{
+		Command: "cat",
+		Args: []string{path},
+		Stdout: stdout,
+	})
+	exitCode, _ := proc.Wait(ctx)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Equal(t, "Hello, world!", stdout.String())
+}
+```
+
+This same code can be run against Docker nodes by merely switching the cluster implementation:
+
+```
+// launch nodes with the "ubuntu" Docker image
+clusterImpl, _ := docker.NewCluster("ubuntu")
+```
+
+or with EC2 nodes in AWS:
+
+```
+clusterImpl, _ := aws.NewCluster()
+```
+
+# Example Code
+There are example tests in the `examples` directory.
 
 Examples require a compiled node agent in the repo root, which you can generate with:
 
@@ -87,7 +139,7 @@ The default test runner implementation is Go, which means that tests themselves 
 
 The Cluster & Node implementations communicate with some specific backend like Docker or AWS to manage nodes. These are generally simple implementations that launch a node and install the node agent.
 
-Consider also that, in scenarios with complex requirements, Cluster implementations can do more complex things such as running other agents/servers/processes on each node, run on top of container orchestrators like Docker compose or k8s, run coordinator nodes, or even delegate cluster & node to another process via RPC. Clustertest allows this type of complexity, but does not mandate it.
+Consider also that, in scenarios with complex requirements, Cluster implementations can do more complex things such as running other agents/servers/processes on each node, run on top of container orchestrators like Docker compose or k8s, run coordinator nodes, or even delegate cluster & node to another process via RPC. Clustertest allows this type of complexity to reuse code across programming languages, but does not mandate it.
 
 # Background
 Clustertest grew out of frustration with [Testground](https://github.com/testground/testground), which is difficult to use for a number of reasons:
