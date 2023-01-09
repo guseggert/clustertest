@@ -160,7 +160,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 			},
 			&container.HostConfig{
 				Binds:        []string{fmt.Sprintf("%s:/nodeagent", c.NodeAgentBin)},
-				PortBindings: nat.PortMap{"8080": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: strconv.Itoa(hostPort)}}},
+				PortBindings: nat.PortMap{"8080": []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: strconv.Itoa(hostPort)}}},
 			},
 			nil,
 			nil,
