@@ -8,13 +8,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// BasicCluster is a basic cluster implementation around a Cluster.
+// BasicCluster wraps a Cluster with convenience functionality.
 // The Cluster interface is designed for minimal implementation footprint.
 // BasicCluster adds convenience methods around a Cluster to make it easier to use.
 // Test authors should generally use this instead of coding against a Cluster directly.
 type BasicCluster struct {
-	cluster Cluster
-	Log     *zap.SugaredLogger
+	Cluster
+	Log *zap.SugaredLogger
 }
 
 type Option func(c *BasicCluster)
@@ -31,9 +31,7 @@ func New(c Cluster, opts ...Option) (*BasicCluster, error) {
 		return nil, fmt.Errorf("constructing default logger: %w", err)
 	}
 
-	bc := &BasicCluster{
-		cluster: c,
-	}
+	bc := &BasicCluster{Cluster: c}
 
 	WithLogger(logger.Sugar())(bc)
 
@@ -45,7 +43,7 @@ func New(c Cluster, opts ...Option) (*BasicCluster, error) {
 }
 
 func (c *BasicCluster) NewNode(ctx context.Context) (*BasicNode, error) {
-	nodes, err := c.cluster.NewNodes(ctx, 1)
+	nodes, err := c.NewNodes(ctx, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +55,7 @@ func (c *BasicCluster) NewNode(ctx context.Context) (*BasicNode, error) {
 
 func (c *BasicCluster) NewNodes(ctx context.Context, n int) ([]*BasicNode, error) {
 	var basicNodes []*BasicNode
-	nodes, err := c.cluster.NewNodes(ctx, n)
+	nodes, err := c.Cluster.NewNodes(ctx, n)
 	for _, n := range nodes {
 		basicNodes = append(basicNodes, &BasicNode{
 			Node: n,
@@ -65,10 +63,6 @@ func (c *BasicCluster) NewNodes(ctx context.Context, n int) ([]*BasicNode, error
 		})
 	}
 	return basicNodes, err
-}
-
-func (c *BasicCluster) Cleanup(ctx context.Context) error {
-	return c.cluster.Cleanup(ctx)
 }
 
 // BasicNode is a basic node implementation around a Node.
@@ -79,8 +73,8 @@ type BasicNode struct {
 	Log *zap.SugaredLogger
 }
 
-// RunWait runs the given command on the node and waits for it to finish, returning its exit code.
-func (n *BasicNode) RunWait(ctx context.Context, req StartProcRequest) (int, error) {
+// Run starts the given command on the node and waits for the process to exit, returning its exit code.
+func (n *BasicNode) Run(ctx context.Context, req StartProcRequest) (int, error) {
 	proc, err := n.StartProc(ctx, req)
 	if err != nil {
 		return -1, err
@@ -92,6 +86,7 @@ func (n *BasicNode) RunWait(ctx context.Context, req StartProcRequest) (int, err
 	return code, nil
 }
 
+// RootDir returns the root directory of the node.
 func (n *BasicNode) RootDir() string {
 	if rootDirer, ok := n.Node.(interface{ RootDir() string }); ok {
 		return rootDirer.RootDir()
