@@ -45,12 +45,11 @@ func TestHelloWorld(t *testing.T) {
 
 	// cat the file and verify stdout
 	stdout := &bytes.Buffer{}
-	proc, _ := node.StartProc(ctx, cluster.StartProcRequest{
+	exitCode, _ := node.Run(ctx, cluster.StartProcRequest{
 		Command: "cat",
 		Args: []string{path},
 		Stdout: stdout,
 	})
-	exitCode, _ := proc.Wait(ctx)
 
 	assert.Equal(t, 0, exitCode)
 	assert.Equal(t, "Hello, world!", stdout.String())
