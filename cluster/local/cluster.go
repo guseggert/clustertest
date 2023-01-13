@@ -20,7 +20,7 @@ import (
 // The performance makes this suitable for fast-feedback unit tests.
 type Cluster struct {
 	dir   string
-	nodes []*node
+	nodes []*Node
 	env   map[string]string
 }
 
@@ -58,7 +58,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 			return nil, fmt.Errorf("creating dir for node %d: %w", id, err)
 		}
 
-		node := &node{
+		node := &Node{
 			ID:  id,
 			Env: map[string]string{},
 			Dir: nodeDir,

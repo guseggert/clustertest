@@ -12,7 +12,7 @@ import (
 	clusteriface "github.com/guseggert/clustertest/cluster"
 )
 
-type node struct {
+type Node struct {
 	ID  int
 	Env map[string]string
 	Dir string
@@ -29,7 +29,7 @@ type proc struct {
 
 func (p *proc) Wait(ctx context.Context) (int, error) { return p.wait(ctx) }
 
-func (n *node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
+func (n *Node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
 	cmd := exec.Command(req.Command, req.Args...)
 	if len(req.Env) > 0 {
 		cmd.Env = append(os.Environ(), req.Env...)
@@ -90,7 +90,7 @@ func (n *node) StartProc(ctx context.Context, req clusteriface.StartProcRequest)
 	}, nil
 }
 
-func (n *node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
+func (n *Node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
 	dir := filepath.Dir(filePath)
 	err := os.MkdirAll(dir, 0777)
 	if err != nil {
@@ -107,22 +107,22 @@ func (n *node) SendFile(ctx context.Context, filePath string, contents io.Reader
 	return err
 }
 
-func (n *node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+func (n *Node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	return os.Open(path)
 }
 
-func (n *node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+func (n *Node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	return net.Dial(network, addr)
 }
 
-func (n *node) Stop(ctx context.Context) error {
+func (n *Node) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (n *node) String() string {
+func (n *Node) String() string {
 	return fmt.Sprintf("local node id=%d", n.ID)
 }
 
-func (n *node) RootDir() string {
+func (n *Node) RootDir() string {
 	return n.Dir
 }

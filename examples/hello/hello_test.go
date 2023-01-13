@@ -3,6 +3,7 @@ package hello
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -40,6 +41,8 @@ func TestHello(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			t.Cleanup(func() { c.Cleanup(ctx) })
+
 			// Launch the nodes. When this returns, all nodes are ready to use.
 			nodes, err := c.NewNodes(ctx, numberNodes)
 			if err != nil {
@@ -52,7 +55,8 @@ func TestHello(t *testing.T) {
 			for i, node := range nodes {
 				go func(nodeNum int, node *cluster.BasicNode) {
 					defer wg.Done()
-					err := node.SendFile(ctx, "/tmp/hello", bytes.NewBuffer([]byte("hello")))
+					filePath := filepath.Join(node.RootDir(), "hello")
+					err := node.SendFile(ctx, filePath, bytes.NewBuffer([]byte("hello")))
 					if err != nil {
 						t.Errorf("sending file to node %d: %s", nodeNum, err)
 						return
@@ -61,7 +65,7 @@ func TestHello(t *testing.T) {
 					stdout := &bytes.Buffer{}
 					proc, err := node.StartProc(ctx, cluster.StartProcRequest{
 						Command: "cat",
-						Args:    []string{"/tmp/hello"},
+						Args:    []string{filePath},
 						Stdout:  stdout,
 					})
 					if err != nil {
@@ -75,10 +79,6 @@ func TestHello(t *testing.T) {
 					assert.Equal(t, 0, exitCode)
 					assert.Equal(t, "hello", stdout.String())
 
-					err = node.Stop(ctx)
-					if err != nil {
-						t.Errorf("stopping node %d: %s", nodeNum, err)
-					}
 				}(i, node)
 			}
 			wg.Wait()

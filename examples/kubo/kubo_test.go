@@ -2,23 +2,27 @@ package kubo
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"sync"
+	"fmt"
 	"testing"
+	"time"
+
+	_ "net/http/pprof"
 
 	"github.com/guseggert/clustertest/cluster"
-	"github.com/guseggert/clustertest/cluster/local"
+	"github.com/guseggert/clustertest/cluster/aws"
+	shell "github.com/ipfs/go-ipfs-api"
+	httpapi "github.com/ipfs/go-ipfs-http-client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var logger *zap.SugaredLogger
 
 func init() {
-	l, err := zap.NewProduction()
-	// l, err := zap.NewDevelopment()
+	// l, err := zap.NewProduction()
+	l, err := zap.NewDevelopment()
 	if err != nil {
 		panic(err)
 	}
@@ -29,98 +33,127 @@ func init() {
 func TestKubo(t *testing.T) {
 	ctx := context.Background()
 	// clusterImpl, err := docker.NewCluster("ubuntu", docker.WithLogger(logger))
-	clusterImpl, err := local.NewCluster()
-	// clusterImpl, err := aws.NewCluster()
+	// clusterImpl, err := local.NewCluster()
+	clusterImpl, err := aws.NewCluster()
 	require.NoError(t, err)
 
 	bc, err := cluster.New(clusterImpl, cluster.WithLogger(logger))
 	require.NoError(t, err)
 
-	c := KuboCluster{BasicCluster: bc}
+	c := Cluster{BasicCluster: bc}
 
 	defer c.Cleanup(ctx)
 
-	numNodes := len(kuboVersions)
+	versions := []string{"v0.15.0", "v0.16.0", "v0.17.0", "v0.18.0-rc1"}
 
-	nodes, err := c.NewKuboNodes(ctx, numNodes)
+	nodes, err := c.NewNodes(ctx, len(versions))
 	require.NoError(t, err)
 
-	kuboPaths, err := ensureKuboCached(t)
-	require.NoError(t, err)
-
-	// send the kubo archive to each node in parallel
-	var wg sync.WaitGroup
-	wg.Add(numNodes)
-	curNode := 0
-	for vers := range kuboVersions {
-		go func(curNode int, vers string) {
-			defer wg.Done()
-			kuboPath := kuboPaths[vers]
-			node := nodes[curNode]
-
-			f, err := os.Open(kuboPath)
-			if !assert.NoError(t, err) {
-				return
-			}
-			defer f.Close()
-
-			err = node.SendFile(ctx, filepath.Join(node.RootDir(), "kubo.tar.gz"), f)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			code, err := node.RunWait(ctx, cluster.StartProcRequest{
-				Command: "tar",
-				Args:    []string{"xzf", "kubo.tar.gz"},
-				WD:      node.RootDir(),
-			})
-			if !assert.NoError(t, err) {
-				return
-			}
-			if !assert.Equal(t, 0, code) {
-				return
-			}
-		}(curNode, vers)
-		curNode++
-	}
-	wg.Wait()
-
-	// run the daemon on each node
+	group, groupCtx := errgroup.WithContext(ctx)
 	daemonCtx, daemonCancel := context.WithCancel(ctx)
-	wg = sync.WaitGroup{}
-	daemonWG := sync.WaitGroup{}
-	for _, node := range nodes {
-		wg.Add(1)
-		node := node
-		go func() {
-			defer wg.Done()
-			err := node.Init(ctx)
-			if !assert.NoError(t, err) {
-				return
+	daemonGroup, daemonGroupCtx := errgroup.WithContext(daemonCtx)
+	for i, version := range versions {
+		node := nodes[i]
+		node.Version = version
+		group.Go(func() error {
+			err := node.LoadBinary(groupCtx)
+			if err != nil {
+				return fmt.Errorf("loading binary: %w", err)
 			}
-			daemonWG.Add(1)
-			go func() {
-				defer daemonWG.Done()
-				err := node.RunDaemon(daemonCtx)
-				assert.ErrorIs(t, err, context.Canceled)
-			}()
-		}()
-	}
-	wg.Wait()
+			err = node.Init(groupCtx)
+			if err != nil {
+				return err
+			}
 
+			err = node.ConfigureForRemote(groupCtx)
+			if err != nil {
+				return err
+			}
+			daemonGroup.Go(func() error { return node.RunDaemon(daemonGroupCtx) })
+			err = node.WaitOnAPI(ctx)
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+	}
+	require.NoError(t, group.Wait())
+
+	var apiClients []*shell.Shell
+	var httpClients []*httpapi.HttpApi
 	actualVersions := map[string]bool{}
 	for _, node := range nodes {
-		node.WaitOnAPI(ctx)
-		rpcClient, err := node.RPCClient(ctx)
+		apiClient, err := node.RPCAPIClient(ctx)
 		require.NoError(t, err)
-		vers, _, err := rpcClient.Version()
+		httpClient, err := node.RPCHTTPClient(ctx)
+		require.NoError(t, err)
+		vers, _, err := apiClient.Version()
 		require.NoError(t, err)
 		actualVersions[vers] = true
+		apiClients = append(apiClients, apiClient)
+		httpClients = append(httpClients, httpClient)
 	}
 
-	assert.Equal(t, map[string]bool{"0.17.0": true, "0.16.0": true}, actualVersions)
+	for fromIdx, from := range nodes {
+		for _, to := range nodes {
+			fromAI, err := from.AddrInfo(ctx)
+			require.NoError(t, err)
+			toAI, err := to.AddrInfo(ctx)
+			require.NoError(t, err)
+
+			if fromAI.ID == toAI.ID {
+				continue
+			}
+
+			RemoveLocalAddrs(toAI)
+
+			err = apiClients[fromIdx].SwarmConnect(ctx, toAI.Addrs[0].String())
+			require.NoError(t, err)
+		}
+	}
+
+	ensureConnected := func(fromIdx int, to *Node) {
+		connected := false
+		fromCIs, err := httpClients[fromIdx].Swarm().Peers(ctx)
+		require.NoError(t, err)
+		for _, ci := range fromCIs {
+			toAI, err := to.AddrInfo(ctx)
+			require.NoError(t, err)
+			if ci.ID() == toAI.ID {
+				connected = true
+			}
+		}
+		assert.True(t, connected)
+	}
+
+	time.Sleep(1 * time.Second)
+	for fromIdx, from := range nodes {
+		for _, to := range nodes {
+			fromAI, err := from.AddrInfo(ctx)
+			require.NoError(t, err)
+			toAI, err := to.AddrInfo(ctx)
+			require.NoError(t, err)
+
+			if fromAI.ID == toAI.ID {
+				continue
+			}
+
+			ensureConnected(fromIdx, to)
+
+			fmt.Printf("%s is connected to %s\n", from.Node, to.Node)
+		}
+	}
+
+	expectedVersions := map[string]bool{
+		"0.18.0-rc1": true,
+		"0.17.0":     true,
+		"0.16.0":     true,
+		"0.15.0":     true,
+	}
+
+	assert.Equal(t, expectedVersions, actualVersions)
 
 	// cancel the context and observe that daemons exit
 	daemonCancel()
-	daemonWG.Wait()
+	require.ErrorIs(t, context.Canceled, daemonGroup.Wait())
 }

@@ -46,7 +46,7 @@ type Cluster struct {
 	ContainerPrefix string
 	DockerClient    *client.Client
 
-	Nodes []*node
+	Nodes []*Node
 
 	imagePulled bool
 }
@@ -182,7 +182,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 			return nil, fmt.Errorf("building nodeagent client: %w", err)
 		}
 
-		node := &node{
+		node := &Node{
 			ID:            id,
 			ContainerName: containerName,
 			ContainerID:   createResp.ID,
@@ -197,7 +197,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 	}
 
 	for _, n := range newNodes {
-		n.(*node).agentClient.WaitForServer(ctx)
+		n.(*Node).agentClient.WaitForServer(ctx)
 	}
 	return newNodes, nil
 }

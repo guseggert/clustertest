@@ -15,7 +15,7 @@ import (
 	clusteriface "github.com/guseggert/clustertest/cluster"
 )
 
-type node struct {
+type Node struct {
 	agentClient *agent.Client
 	sess        *session.Session
 	ec2Client   *ec2.EC2
@@ -27,27 +27,31 @@ type node struct {
 	stopHeartbeat     chan struct{}
 }
 
-func (n *node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
+func (n *Node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
 	return n.agentClient.StartProc(ctx, req)
 }
 
-func (n *node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
+func (n *Node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
 	return n.agentClient.SendFile(ctx, filePath, contents)
 }
 
-func (n *node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+func (n *Node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	return n.agentClient.ReadFile(ctx, path)
 }
 
-func (n *node) Heartbeat(ctx context.Context) error {
+func (n *Node) Heartbeat(ctx context.Context) error {
 	return n.agentClient.SendHeartbeat(ctx)
 }
 
-func (n *node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+func (n *Node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	return n.agentClient.DialContext(ctx, network, addr)
 }
 
-func (n *node) StartHeartbeat() {
+func (n *Node) Fetch(ctx context.Context, url, path string) error {
+	return n.agentClient.Fetch(ctx, url, path)
+}
+
+func (n *Node) StartHeartbeat() {
 	go n.heartbeatOnce.Do(func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -65,11 +69,11 @@ func (n *node) StartHeartbeat() {
 	})
 }
 
-func (n *node) StopHeartbeat() {
+func (n *Node) StopHeartbeat() {
 	n.stopHeartbeatOnce.Do(func() { close(n.stopHeartbeat) })
 }
 
-func (n *node) Stop(ctx context.Context) error {
+func (n *Node) Stop(ctx context.Context) error {
 	_, err := n.ec2Client.TerminateInstancesWithContext(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []*string{&n.instanceID},
 	})
@@ -79,6 +83,6 @@ func (n *node) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (n *node) String() string {
+func (n *Node) String() string {
 	return fmt.Sprintf("EC2 instance region=%s account=%s instanceID=%s", *n.sess.Config.Region, n.accountID, n.instanceID)
 }

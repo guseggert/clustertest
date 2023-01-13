@@ -43,6 +43,7 @@ export class AwsStack extends cdk.Stack {
 
         securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(8080))
         securityGroup.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(8080))
+        securityGroup.addIngressRule(securityGroup, ec2.Port.allTraffic())
 
         // Export the stack ARN, which we can use to lookup the other outputs without having to export them.
         new cdk.CfnOutput(this, "ClustertestStackARN", {

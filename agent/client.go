@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/guseggert/clustertest/agent/process"
 	clusteriface "github.com/guseggert/clustertest/cluster"
+	"github.com/hashicorp/go-retryablehttp"
 	"go.uber.org/zap"
 	"nhooyr.io/websocket"
 )
@@ -44,6 +47,12 @@ func WithClientLogger(l *zap.Logger) ClientOption {
 	}
 }
 
+type logAdapter struct {
+	*zap.SugaredLogger
+}
+
+func (a *logAdapter) Printf(msg string, args ...interface{}) { a.Debugf(msg, args...) }
+
 func NewClient(log *zap.SugaredLogger, certs *Certs, ipAddr string, port int, opts ...ClientOption) (*Client, error) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	httpDialAddrPort := fmt.Sprintf("%s:%d", ipAddr, port)
@@ -62,13 +71,22 @@ func NewClient(log *zap.SugaredLogger, certs *Certs, ipAddr string, port int, op
 		return nil, fmt.Errorf("building client TLS config: %w", err)
 	}
 
-	httpClient := &http.Client{
+	retryClient := retryablehttp.NewClient()
+	retryClient.HTTPClient = &http.Client{
 		Transport: &http.Transport{
 			DialContext:     dialCtx,
 			MaxConnsPerHost: 0,
 			TLSClientConfig: tlsConfig,
 		},
 	}
+	retryClient.Backoff = func(min, max time.Duration, attemptNum int, resp *http.Response) time.Duration {
+		return 10 * time.Millisecond
+	}
+	retryClient.RetryMax = 10
+	retryClient.Logger = &logAdapter{SugaredLogger: log}
+
+	httpClient := retryClient.StandardClient()
+
 	baseURL := fmt.Sprintf("https://nodeagent:%d", port)
 	commandURL := baseURL + "/command"
 
@@ -127,7 +145,7 @@ func (c *Client) SendHeartbeat(ctx context.Context) error {
 func (c *Client) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
 	urlPath := path.Join("/file", filePath)
 	u := c.baseURL + urlPath
-	httpReq, err := http.NewRequest(http.MethodPost, u, contents)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, contents)
 	if err != nil {
 		return fmt.Errorf("building request: %w", err)
 	}
@@ -158,7 +176,7 @@ func (c *Client) SendFile(ctx context.Context, filePath string, contents io.Read
 func (c *Client) ReadFile(ctx context.Context, filePath string) (io.ReadCloser, error) {
 	urlPath := path.Join("/file", filePath)
 	u := c.baseURL + urlPath
-	httpReq, err := http.NewRequest(http.MethodGet, u, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building request: %w", err)
 	}
@@ -197,6 +215,41 @@ func (c *Client) StartProc(ctx context.Context, runReq clusteriface.StartProcReq
 		Stdout:  runReq.Stdout,
 		Stderr:  runReq.Stderr,
 	})
+}
+
+func (c *Client) Fetch(ctx context.Context, url, path string) error {
+	fetchReq := FetchRequest{
+		URL:  url,
+		Dest: path,
+	}
+	u := c.baseURL + "/fetch"
+	b, err := json.Marshal(fetchReq)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+
+	c.prepReq(httpReq)
+
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		defer httpResp.Body.Close()
+		var body string
+		b, err := io.ReadAll(httpResp.Body)
+		if err != nil {
+			body = fmt.Errorf("error reading body: %w", err).Error()
+		} else {
+			body = string(b)
+		}
+		return fmt.Errorf("non-200 HTTP status code %d received when fetching: %s", httpResp.StatusCode, body)
+	}
+	return nil
 }
 
 // Dial establishes a connection to the given address, using the node as a proxy.

@@ -12,7 +12,7 @@ import (
 	clusteriface "github.com/guseggert/clustertest/cluster"
 )
 
-type node struct {
+type Node struct {
 	ID            int
 	ContainerName string
 	ContainerID   string
@@ -22,7 +22,7 @@ type node struct {
 	agentClient   *agent.Client
 }
 
-func (n *node) runEnv(reqEnv map[string]string) []string {
+func (n *Node) runEnv(reqEnv map[string]string) []string {
 	var env []string
 	envMap := map[string]string{}
 	for k, v := range n.Env {
@@ -37,19 +37,19 @@ func (n *node) runEnv(reqEnv map[string]string) []string {
 	return env
 }
 
-func (n *node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
+func (n *Node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
 	return n.agentClient.StartProc(ctx, req)
 }
 
-func (n *node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
+func (n *Node) SendFile(ctx context.Context, filePath string, contents io.Reader) error {
 	return n.agentClient.SendFile(ctx, filePath, contents)
 }
 
-func (n *node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+func (n *Node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	return n.agentClient.ReadFile(ctx, path)
 }
 
-func (n *node) Stop(ctx context.Context) error {
+func (n *Node) Stop(ctx context.Context) error {
 	err := n.dockerClient.ContainerRemove(ctx, n.ContainerID, types.ContainerRemoveOptions{
 		RemoveVolumes: true,
 		Force:         true,
@@ -60,10 +60,10 @@ func (n *node) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (n *node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+func (n *Node) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	return n.agentClient.DialContext(ctx, network, addr)
 }
 
-func (n *node) String() string {
+func (n *Node) String() string {
 	return fmt.Sprintf("local node id=%d", n.ID)
 }

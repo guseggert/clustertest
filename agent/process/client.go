@@ -181,8 +181,8 @@ func (r *clientProcRunner) readMessages() {
 		err := wsjson.Read(r.ctx, r.conn, &msg)
 		if websocket.CloseStatus(err) != -1 {
 			r.resultCh <- cmdResult{code: -1, err: fmt.Errorf("conn unexpectedly closed: %w", err)}
-			close(r.stderrCh)
-			close(r.stdoutCh)
+			closeStderr()
+			closeStdout()
 			return
 		}
 		if err != nil {

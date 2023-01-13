@@ -32,7 +32,7 @@ cd /node
 curl --retry 3 '{{.NodeAgentURL}}' > nodeagent
 chmod +x nodeagent
 nohup ./nodeagent \
-  --heartbeat-timeout 1m \
+  --heartbeat-timeout 10m \
   --on-heartbeat-failure shutdown \
   --ca-cert-pem {{.CACertPEMEncoded}} \
   --cert-pem {{.CertPEMEncoded}} \
@@ -180,7 +180,7 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 		Session:                 sess,
 		EC2Client:               ec2.New(sess),
 		S3Client:                s3.New(sess),
-		InstanceType:            "t3.nano",
+		InstanceType:            "t3.micro",
 		NodeAgentS3Bucket:       outputs.s3Bucket,
 		Cert:                    cert,
 	}
@@ -320,13 +320,13 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 	}
 
 	var ifaceNodes clusteriface.Nodes
-	var nodes []*node
+	var nodes []*Node
 	for _, inst := range instances {
 		nodeAgentClient, err := agent.NewClient(c.Log, c.Cert, *inst.PublicIpAddress, 8080)
 		if err != nil {
 			return nil, fmt.Errorf("constructing node agent client: %w", err)
 		}
-		node := &node{
+		node := &Node{
 			agentClient: nodeAgentClient,
 			sess:        c.Session,
 			ec2Client:   c.EC2Client,
@@ -346,7 +346,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 	return ifaceNodes, nil
 }
 
-func (c *Cluster) waitForNodeHeartbeat(ctx context.Context, node *node) {
+func (c *Cluster) waitForNodeHeartbeat(ctx context.Context, node *Node) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -362,7 +362,7 @@ func (c *Cluster) waitForNodeHeartbeat(ctx context.Context, node *node) {
 	}
 }
 
-func (c *Cluster) waitForNodesHeartbeats(ctx context.Context, nodes []*node) error {
+func (c *Cluster) waitForNodesHeartbeats(ctx context.Context, nodes []*Node) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	wg := sync.WaitGroup{}

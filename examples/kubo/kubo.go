@@ -4,109 +4,166 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
-	"testing"
+	"sync"
 	"time"
 
 	"github.com/guseggert/clustertest/cluster"
+	"github.com/guseggert/clustertest/cluster/docker"
+	"github.com/guseggert/clustertest/cluster/local"
 	shell "github.com/ipfs/go-ipfs-api"
+	httpapi "github.com/ipfs/go-ipfs-http-client"
+	"github.com/ipfs/kubo/config"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 )
 
-type versionInfo struct {
-	URL string
-	CID string
-}
+type Cluster struct{ *cluster.BasicCluster }
 
-var (
-	kuboVersions = map[string]versionInfo{
-		"0.17.0": {
-			URL: "https://dist.ipfs.tech/kubo/v0.17.0/kubo_v0.17.0_linux-amd64.tar.gz",
-			CID: "QmNhHcEZgSt2sbRaE8C9GVTPt8S9sP9J1FAEs22kdAHFzo",
-		},
-		"0.16.0": {
-			URL: "https://dist.ipfs.tech/kubo/v0.16.0/kubo_v0.16.0_linux-amd64.tar.gz",
-			CID: "QmPwfD1YBrgh3vN6ca5398bXRLkpGNUukhMqEFKbQuPqYT",
-		},
-	}
-)
-
-// ensureKuboCached ensures the kubo archive is cached locally, and returns paths to them.
-func ensureKuboCached(t *testing.T) (map[string]string, error) {
-	paths := map[string]string{}
-	tempDir := os.TempDir()
-	for vers, info := range kuboVersions {
-		kuboArchive := filepath.Join(tempDir, info.CID)
-		_, err := os.Stat(kuboArchive)
-		if err != nil {
-			if os.IsNotExist(err) {
-				t.Logf("downloading archive for kubo %s", vers)
-				resp, err := http.Get(info.URL)
-				if err != nil {
-					return nil, fmt.Errorf("fetching kubo archive: %w", err)
-				}
-				defer resp.Body.Close()
-				f, err := os.Create(kuboArchive)
-				if err != nil {
-					return nil, fmt.Errorf("creating kubo archive: %w", err)
-				}
-				_, err = io.Copy(f, resp.Body)
-				if err != nil {
-					return nil, fmt.Errorf("copying Kubo archive: %w", err)
-				}
-			} else {
-				return nil, err
-			}
-		}
-		paths[vers] = kuboArchive
-	}
-	return paths, nil
-}
-
-type KuboCluster struct{ *cluster.BasicCluster }
-
-func (c *KuboCluster) NewKuboNodes(ctx context.Context, n int) ([]*KuboNode, error) {
-	var kuboNodes []*KuboNode
+func (c *Cluster) NewNodes(ctx context.Context, n int, opts ...NodeOption) ([]*Node, error) {
+	var kuboNodes []*Node
 	nodes, err := c.BasicCluster.NewNodes(ctx, n)
 	if err != nil {
 		return nil, err
 	}
 	for _, n := range nodes {
-		kuboNodes = append(kuboNodes, NewKuboNode(n, n.Log))
+		kn, err := NewNode(ctx, n, opts...)
+		if err != nil {
+			return nil, err
+		}
+		kuboNodes = append(kuboNodes, kn)
 	}
 	return kuboNodes, nil
 }
 
-type KuboNode struct {
+type Node struct {
 	*cluster.BasicNode
 
-	Log *zap.SugaredLogger
-
-	Version string
-
+	Log        *zap.SugaredLogger
 	HTTPClient *http.Client
+	Version    string
+
+	versionsMut sync.Mutex
+	versions    VersionMap
+
+	apiAddr multiaddr.Multiaddr
 
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
 }
 
-func NewKuboNode(node *cluster.BasicNode, log *zap.SugaredLogger) *KuboNode {
-	newTransport := http.DefaultTransport.(*http.Transport).Clone()
-	newTransport.DialContext = node.Dial
-	httpClient := http.Client{Transport: newTransport}
-	return &KuboNode{
-		BasicNode:  node,
-		Log:        log.Named("kubo_node"),
-		HTTPClient: &httpClient,
+type NodeOption func(*Node)
+
+func WithNodeLogger(l *zap.SugaredLogger) NodeOption {
+	return func(kn *Node) {
+		kn.Log = l.Named("kubo_node")
 	}
 }
 
-func (n *KuboNode) RunDaemon(ctx context.Context) error {
+func WithKuboVersion(version string) NodeOption {
+	return func(kn *Node) {
+		kn.Version = version
+	}
+}
+
+func NewNode(ctx context.Context, node *cluster.BasicNode, opts ...NodeOption) (*Node, error) {
+	newTransport := http.DefaultTransport.(*http.Transport).Clone()
+	newTransport.DialContext = node.Dial
+	httpClient := http.Client{Transport: newTransport}
+
+	kn := &Node{
+		BasicNode:  node,
+		HTTPClient: &httpClient,
+	}
+
+	for _, o := range opts {
+		o(kn)
+	}
+
+	if kn.Log == nil {
+		l, err := zap.NewProduction()
+		if err != nil {
+			return nil, err
+		}
+		WithNodeLogger(l.Sugar())(kn)
+	}
+
+	if kn.Version == "" {
+		WithKuboVersion("v0.17.0")(kn)
+	}
+
+	return kn, nil
+}
+
+func (n *Node) getOrFetchVersions(ctx context.Context) (VersionMap, error) {
+	n.versionsMut.Lock()
+	defer n.versionsMut.Unlock()
+	if n.versions == nil {
+		versionMap, err := FetchVersions(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("fetching versions: %w", err)
+		}
+		n.versions = versionMap
+	}
+	return n.versions, nil
+}
+
+func (n *Node) LoadBinary(ctx context.Context) error {
+	versions, err := n.getOrFetchVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("fetching versions: %w", err)
+	}
+	var rc io.ReadCloser
+	_, isLocalNode := n.Node.(*local.Node)
+	_, isDockerNode := n.Node.(*docker.Node)
+	if isLocalNode || isDockerNode {
+		// if we're running locally, use local disk cache
+		rc, err = versions.FetchArchiveWithCaching(ctx, n.Version)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		err = n.SendFile(ctx, filepath.Join(n.RootDir(), "kubo.tar.gz"), rc)
+		if err != nil {
+			return err
+		}
+
+	} else if fetcher, ok := n.Node.(cluster.Fetcher); ok {
+		vi, ok := versions[n.Version]
+		if !ok {
+			return fmt.Errorf("no such version %q", n.Version)
+		}
+		err = fetcher.Fetch(ctx, vi.URL, filepath.Join(n.RootDir(), "kubo.tar.gz"))
+		if err != nil {
+			return err
+		}
+	} else {
+		rc, err = versions.FetchArchive(ctx, n.Version)
+		if err != nil {
+			return err
+		}
+	}
+
+	code, err := n.Run(ctx, cluster.StartProcRequest{
+		Command: "tar",
+		Args:    []string{"xzf", "kubo.tar.gz"},
+		WD:      n.RootDir(),
+	})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("non-zero exit code %d when unarchiving", code)
+	}
+	return nil
+}
+
+func (n *Node) RunDaemon(ctx context.Context) error {
 	stderr := &bytes.Buffer{}
 	stdout := &bytes.Buffer{}
 	proc, err := n.StartProc(ctx, cluster.StartProcRequest{
@@ -135,7 +192,7 @@ func (n *KuboNode) RunDaemon(ctx context.Context) error {
 	return nil
 }
 
-func (n *KuboNode) Init(ctx context.Context) error {
+func (n *Node) Init(ctx context.Context) error {
 	err := n.RunKubo(ctx, cluster.StartProcRequest{
 		Args: []string{"init"},
 	})
@@ -143,37 +200,77 @@ func (n *KuboNode) Init(ctx context.Context) error {
 		return fmt.Errorf("initializing Kubo: %w", err)
 	}
 
-	configs := map[string]string{
-		"Bootstrap":               "[]",
-		"Addresses.Swarm":         `["/ip4/127.0.0.1/tcp/0"]`,
-		"Addresses.API":           `["/ip4/127.0.0.1/tcp/0"]`,
-		"Addresses.Gateway":       `["/ip4/127.0.0.1/tcp/0"]`,
-		"Swarm.DisableNatPortMap": "true",
-		"Discovery.MDNS.Enabled":  "false",
-	}
+	return nil
+}
 
-	for k, v := range configs {
+func (n *Node) SetConfig(ctx context.Context, cfg map[string]string) error {
+	// note that this must be serialized since the CLI barfs if it can't acquire the repo lock
+	for k, v := range cfg {
 		var stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
-		err = n.RunKubo(ctx, cluster.StartProcRequest{
+		err := n.RunKubo(ctx, cluster.StartProcRequest{
 			Args:   []string{"config", "--json", k, v},
 			Stdout: stdout,
 			Stderr: stderr,
 		})
 		if err != nil {
-			fmt.Printf("stdout: %s\n", stdout)
-			fmt.Printf("stderr: %s\n", stderr)
 			return fmt.Errorf("setting config %q when initializing: %w", k, err)
 		}
 	}
-
 	return nil
 }
 
-func (n *KuboNode) IPFSPath() string {
+func (n *Node) ConfigureForLocal(ctx context.Context) error {
+	return n.UpdateConfig(ctx, func(cfg *config.Config) {
+		cfg.Bootstrap = nil
+		cfg.Addresses.Swarm = []string{"/ip4/127.0.0.1/tcp/0"}
+		cfg.Addresses.API = []string{"/ip4/127.0.0.1/tcp/0"}
+		cfg.Addresses.Gateway = []string{"/ip4/127.0.0.1/tcp/0"}
+		cfg.Swarm.DisableNatPortMap = true
+		cfg.Discovery.MDNS.Enabled = false
+	})
+}
+
+func (n *Node) ConfigureForRemote(ctx context.Context) error {
+	return n.UpdateConfig(ctx, func(cfg *config.Config) {
+		cfg.Bootstrap = nil
+		cfg.Addresses.Swarm = []string{"/ip4/0.0.0.0/tcp/0"}
+		cfg.Addresses.API = []string{"/ip4/127.0.0.1/tcp/0"}
+		cfg.Addresses.Gateway = []string{"/ip4/127.0.0.1/tcp/0"}
+		cfg.Swarm.DisableNatPortMap = true
+		cfg.Discovery.MDNS.Enabled = false
+	})
+}
+
+// func (n *Node) ConfigureForLocal(ctx context.Context) error {
+// 	return n.SetConfig(ctx, map[string]string{
+// 		"Bootstrap":               "[]",
+// 		"Addresses.Swarm":         `["/ip4/127.0.0.1/tcp/0"]`,
+// 		"Addresses.API":           `["/ip4/127.0.0.1/tcp/0"]`,
+// 		"Addresses.Gateway":       `["/ip4/127.0.0.1/tcp/0"]`,
+// 		"Swarm.DisableNatPortMap": "true",
+// 		"Discovery.MDNS.Enabled":  "false",
+// 	})
+// }
+
+// func (n *Node) ConfigureForRemote(ctx context.Context) error {
+// 	return n.SetConfig(ctx, map[string]string{
+// 		"Bootstrap":               "[]",
+// 		"Addresses.Swarm":         `["/ip4/0.0.0.0/tcp/0"]`,
+// 		"Addresses.API":           `["/ip4/127.0.0.1/tcp/0"]`,
+// 		"Addresses.Gateway":       `["/ip4/127.0.0.1/tcp/0"]`,
+// 		"Swarm.DisableNatPortMap": "true",
+// 		"Discovery.MDNS.Enabled":  "false",
+// 	})
+// }
+
+func (n *Node) IPFSPath() string {
 	return filepath.Join(n.RootDir(), ".ipfs")
 }
 
-func (n *KuboNode) APIAddr(ctx context.Context) (multiaddr.Multiaddr, error) {
+func (n *Node) APIAddr(ctx context.Context) (multiaddr.Multiaddr, error) {
+	if n.apiAddr != nil {
+		return n.apiAddr, nil
+	}
 	rc, err := n.ReadFile(ctx, filepath.Join(n.IPFSPath(), "api"))
 	if err != nil {
 		return nil, fmt.Errorf("opening api file: %w", err)
@@ -183,15 +280,20 @@ func (n *KuboNode) APIAddr(ctx context.Context) (multiaddr.Multiaddr, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading api file: %w", err)
 	}
-	return multiaddr.NewMultiaddr(string(b))
+	ma, err := multiaddr.NewMultiaddr(string(b))
+	if err != nil {
+		return nil, err
+	}
+	n.apiAddr = ma
+	return ma, nil
 }
 
-func (n *KuboNode) RunKubo(ctx context.Context, req cluster.StartProcRequest) error {
+func (n *Node) RunKubo(ctx context.Context, req cluster.StartProcRequest) error {
 	req.Env = append(req.Env, "IPFS_PATH="+n.IPFSPath())
 
 	req.Command = filepath.Join(n.RootDir(), "kubo", "ipfs")
 
-	code, err := n.RunWait(ctx, req)
+	code, err := n.Run(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -201,7 +303,19 @@ func (n *KuboNode) RunKubo(ctx context.Context, req cluster.StartProcRequest) er
 	return nil
 }
 
-func (n *KuboNode) RPCClient(ctx context.Context) (*shell.Shell, error) {
+// RPCHTTPClient returns an HTTP RPC client configured for this node (https://github.com/ipfs/go-ipfs-http-client)
+// We call this the "HTTP Client" to distinguish it from the "API Client". Both are very similar, but slightly different.
+func (n *Node) RPCHTTPClient(ctx context.Context) (*httpapi.HttpApi, error) {
+	apiMA, err := n.APIAddr(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting API address: %w", err)
+	}
+	return httpapi.NewApiWithClient(apiMA, n.HTTPClient)
+}
+
+// RPCClient returns an RPC client configured for this node (https://github.com/ipfs/go-ipfs-api)
+// We call this the "API Client" to distinguish it from the "HTTP Client". Both are very similar, but slightly different.
+func (n *Node) RPCAPIClient(ctx context.Context) (*shell.Shell, error) {
 	apiMA, err := n.APIAddr(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting API address: %w", err)
@@ -218,20 +332,48 @@ func (n *KuboNode) RPCClient(ctx context.Context) (*shell.Shell, error) {
 	return shell.NewShellWithClient(u, n.HTTPClient), nil
 }
 
-func (n *KuboNode) WaitOnAPI(ctx context.Context) bool {
+func (n *Node) AddrInfo(ctx context.Context) (*peer.AddrInfo, error) {
+	sh, err := n.RPCAPIClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("building API client: %w", err)
+	}
+	idOutput, err := sh.ID()
+	if err != nil {
+		return nil, fmt.Errorf("fetching id: %w", err)
+	}
+	peerID, err := peer.Decode(idOutput.ID)
+	if err != nil {
+		return nil, fmt.Errorf("decoding peer ID: %w", err)
+	}
+	var multiaddrs []multiaddr.Multiaddr
+	for _, a := range idOutput.Addresses {
+		ma, err := multiaddr.NewMultiaddr(a)
+		if err != nil {
+			return nil, fmt.Errorf("decoding multiaddr %q: %w", a, err)
+		}
+		multiaddrs = append(multiaddrs, ma)
+	}
+	return &peer.AddrInfo{
+		ID:    peerID,
+		Addrs: multiaddrs,
+	}, nil
+
+}
+
+func (n *Node) WaitOnAPI(ctx context.Context) error {
 	n.Log.Debug("waiting on API")
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 500; i++ {
 		if n.checkAPI(ctx) {
 			n.Log.Debugf("daemon API found")
-			return true
+			return nil
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	n.Log.Debug("node failed to come online: \n%s\n\n%s", n.stderr, n.stdout)
-	return false
+	return errors.New("timed out waiting on API")
 }
 
-func (n *KuboNode) checkAPI(ctx context.Context) bool {
+func (n *Node) checkAPI(ctx context.Context) bool {
 	apiAddr, err := n.APIAddr(ctx)
 	if err != nil {
 		n.Log.Debugf("API addr not available yet: %s", err.Error())
@@ -277,4 +419,88 @@ func (n *KuboNode) checkAPI(ctx context.Context) bool {
 	}
 	n.Log.Debug("API check successful")
 	return true
+}
+
+func (n *Node) ReadConfig(ctx context.Context) (*config.Config, error) {
+	rc, err := n.ReadFile(ctx, filepath.Join(n.IPFSPath(), "config"))
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	var cfg config.Config
+	err = json.NewDecoder(rc).Decode(&cfg)
+	return &cfg, err
+}
+
+func (n *Node) WriteConfig(ctx context.Context, c *config.Config) error {
+	b, err := config.Marshal(c)
+	if err != nil {
+		return err
+	}
+	err = n.SendFile(ctx, filepath.Join(n.IPFSPath(), "config"), bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (n *Node) UpdateConfig(ctx context.Context, f func(cfg *config.Config)) error {
+	cfg, err := n.ReadConfig(ctx)
+	if err != nil {
+		return err
+	}
+	f(cfg)
+	return n.WriteConfig(ctx, cfg)
+}
+
+func MultiaddrContains(ma multiaddr.Multiaddr, component *multiaddr.Component) (bool, error) {
+	v, err := ma.ValueForProtocol(component.Protocol().Code)
+	if err == multiaddr.ErrProtocolNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return v == component.Value(), nil
+}
+
+func IsLoopback(ma multiaddr.Multiaddr) (bool, error) {
+	ip4Loopback, err := multiaddr.NewComponent("ip4", "127.0.0.1")
+	if err != nil {
+		return false, err
+	}
+	ip6Loopback, err := multiaddr.NewComponent("ip6", "::1")
+	if err != nil {
+		return false, err
+	}
+	ip4MapperIP6Loopback, err := multiaddr.NewComponent("ip6", "::ffff:127.0.0.1")
+	if err != nil {
+		return false, err
+	}
+	loopbackComponents := []*multiaddr.Component{ip4Loopback, ip6Loopback, ip4MapperIP6Loopback}
+	for _, lc := range loopbackComponents {
+		contains, err := MultiaddrContains(ma, lc)
+		if err != nil {
+			return false, err
+		}
+		if contains {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func RemoveLocalAddrs(ai *peer.AddrInfo) error {
+	var newMAs []multiaddr.Multiaddr
+	for _, addr := range ai.Addrs {
+		isLoopback, err := IsLoopback(addr)
+		if err != nil {
+			return err
+		}
+		if !isLoopback {
+			newMAs = append(newMAs, addr)
+		}
+	}
+	ai.Addrs = newMAs
+	return nil
 }

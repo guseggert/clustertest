@@ -160,6 +160,7 @@ func (a *NodeAgent) runHTTPServer() error {
 	router.POST("/file/*path", a.postFile)
 	router.GET("/file/*path", a.readFile)
 	router.GET("/connect/:network/:addr", a.connect)
+	router.POST("/fetch", a.fetch)
 
 	handler := a.logHandler(router)
 
@@ -199,6 +200,43 @@ func (a *NodeAgent) Run() error {
 type ConnectRequest struct {
 	Addr    string
 	Network string
+}
+
+type FetchRequest struct {
+	URL  string
+	Dest string
+}
+
+func (a *NodeAgent) fetch(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+	var req FetchRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Create(req.Dest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, req.URL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(f, resp.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 // connect proxies traffic to a destination through the agent, via a WebSocket connection

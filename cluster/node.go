@@ -36,6 +36,13 @@ type Node interface {
 	ReadFile(ctx context.Context, path string) (io.ReadCloser, error)
 	Stop(ctx context.Context) error
 	Dial(ctx context.Context, network, address string) (net.Conn, error)
+	String() string
+}
+
+// An optional node interface for making HTTP requests on the node.
+type Fetcher interface {
+	// Fetch fetches content from a URL with an HTTP GET and stores the content in the given path on the node.
+	Fetch(ctx context.Context, url, path string) error
 }
 
 type Nodes []Node
