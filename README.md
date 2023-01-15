@@ -162,4 +162,4 @@ Clustertest strives for simplicity and minimizing cognitive load with the follow
   - Work directly and imperatively with resources instead of indirectly and declaratively via Kubernetes
   - Test results, metrics, logs, etc. collected directly by the test runner
   
-The goal clustertest is to provide similar practical capabilities as Testground, but with less end-user code, moving parts, cost, and cognitive overhead. Clustertest can launch heterogeneous clusters of nodes across cloud providers, regions, datacenters, etc., running multiple programming languages, versions, etc.
+Clustertest is more similar to [IPTB](https://github.com/ipfs/iptb) than Testground, but uses a programming language instead of a CLI, runs in-process, and works on remote clusters.

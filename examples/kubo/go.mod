@@ -4,8 +4,8 @@ go 1.19
 
 require (
 	github.com/guseggert/clustertest v0.0.1
-	github.com/ipfs/go-ipfs-api v0.3.0
-	github.com/ipfs/go-ipfs-http-client v0.4.0
+	github.com/ipfs/go-ipfs-api v0.3.1-0.20230115111907-7f63cbcb569f
+	github.com/ipfs/go-ipfs-http-client v0.4.1-0.20230115111817-c94830dff571
 	github.com/ipfs/kubo v0.17.0
 	github.com/libp2p/go-libp2p v0.24.2
 	github.com/multiformats/go-multiaddr v0.8.0
@@ -17,7 +17,6 @@ require (
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/Microsoft/go-winio v0.6.0 // indirect
-	github.com/aws/aws-sdk-go v1.36.30 // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/crackcomm/go-gitignore v0.0.0-20170627025303-887ab5e44cc3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -58,7 +57,6 @@ require (
 	github.com/ipld/go-codec-dagpb v1.4.1 // indirect
 	github.com/ipld/go-ipld-prime v0.19.0 // indirect
 	github.com/jbenet/goprocess v0.1.4 // indirect
-	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/julienschmidt/httprouter v1.3.0 // indirect
 	github.com/klauspost/compress v1.15.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.1 // indirect
@@ -106,7 +104,3 @@ require (
 )
 
 replace github.com/guseggert/clustertest => ../..
-
-replace github.com/ipfs/go-ipfs-http-client => ../../../go-ipfs-http-client
-
-replace github.com/ipfs/go-ipfs-api => ../../../go-ipfs-api

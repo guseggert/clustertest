@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type VersionMap map[string]VersionInfo
@@ -35,53 +37,37 @@ type archJSON struct {
 }
 
 func FetchVersions(ctx context.Context) (VersionMap, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	wg := sync.WaitGroup{}
-	versionChan := make(chan string)
-	errChan := make(chan error)
+	m := sync.Mutex{}
+	versionMap := VersionMap{}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://dist.ipfs.tech/kubo/versions", nil)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(6)
+
+	group.Go(func() error {
+		req, err := http.NewRequestWithContext(groupCtx, http.MethodGet, "https://dist.ipfs.tech/kubo/versions", nil)
 		if err != nil {
-			errChan <- err
-			return
+			return err
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			errChan <- err
-			return
+			return err
 		}
 		defer resp.Body.Close()
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
-			versionChan <- strings.TrimSpace(scanner.Text())
-		}
-		close(versionChan)
-	}()
-
-	m := sync.Mutex{}
-	versionMap := VersionMap{}
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for version := range versionChan {
+			version := strings.TrimSpace(scanner.Text())
+			group.Go(func() error {
 				url := fmt.Sprintf("https://dist.ipfs.tech/kubo/%s/dist.json", version)
 				req, err := http.NewRequest(http.MethodGet, url, nil)
 				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
-					errChan <- err
-					return
+					return err
 				}
 				var v versionJSON
 				err = json.NewDecoder(resp.Body).Decode(&v)
 				resp.Body.Close()
 				if err != nil {
-					errChan <- err
-					return
+					return err
 				}
 				arch := v.Platforms["linux"].Archs["amd64"]
 				m.Lock()
@@ -90,17 +76,16 @@ func FetchVersions(ctx context.Context) (VersionMap, error) {
 					CID: arch.CID,
 				}
 				m.Unlock()
-			}
-		}()
-	}
-	go func() {
-		wg.Wait()
-		close(errChan)
-	}()
-	for err := range errChan {
+				return nil
+			})
+		}
+		return nil
+	})
+	err := group.Wait()
+	if err != nil {
 		return nil, err
 	}
-	wg.Wait()
+
 	return versionMap, nil
 }
 

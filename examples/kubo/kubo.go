@@ -51,7 +51,10 @@ type Node struct {
 	versionsMut sync.Mutex
 	versions    VersionMap
 
-	apiAddr multiaddr.Multiaddr
+	// cached data
+	apiAddr       multiaddr.Multiaddr
+	rpcAPIClient  *shell.Shell
+	rcpHTTPClient *httpapi.HttpApi
 
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
@@ -306,16 +309,27 @@ func (n *Node) RunKubo(ctx context.Context, req cluster.StartProcRequest) error 
 // RPCHTTPClient returns an HTTP RPC client configured for this node (https://github.com/ipfs/go-ipfs-http-client)
 // We call this the "HTTP Client" to distinguish it from the "API Client". Both are very similar, but slightly different.
 func (n *Node) RPCHTTPClient(ctx context.Context) (*httpapi.HttpApi, error) {
+	if n.rcpHTTPClient != nil {
+		return n.rcpHTTPClient, nil
+	}
 	apiMA, err := n.APIAddr(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting API address: %w", err)
 	}
-	return httpapi.NewApiWithClient(apiMA, n.HTTPClient)
+	c, err := httpapi.NewApiWithClient(apiMA, n.HTTPClient)
+	if err != nil {
+		return nil, err
+	}
+	n.rcpHTTPClient = c
+	return c, nil
 }
 
 // RPCClient returns an RPC client configured for this node (https://github.com/ipfs/go-ipfs-api)
 // We call this the "API Client" to distinguish it from the "HTTP Client". Both are very similar, but slightly different.
 func (n *Node) RPCAPIClient(ctx context.Context) (*shell.Shell, error) {
+	if n.rpcAPIClient != nil {
+		return n.rpcAPIClient, nil
+	}
 	apiMA, err := n.APIAddr(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting API address: %w", err)
@@ -329,7 +343,12 @@ func (n *Node) RPCAPIClient(ctx context.Context) (*shell.Shell, error) {
 		return nil, fmt.Errorf("getting TCP port; %w", err)
 	}
 	u := fmt.Sprintf("%s:%s", ipAddr, port)
-	return shell.NewShellWithClient(u, n.HTTPClient), nil
+	c, err := shell.NewShellWithClient(u, n.HTTPClient), nil
+	if err != nil {
+		return nil, err
+	}
+	n.rpcAPIClient = c
+	return c, nil
 }
 
 func (n *Node) AddrInfo(ctx context.Context) (*peer.AddrInfo, error) {

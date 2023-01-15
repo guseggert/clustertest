@@ -9,9 +9,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/guseggert/clustertest/cluster"
-	"github.com/guseggert/clustertest/cluster/aws"
-	shell "github.com/ipfs/go-ipfs-api"
-	httpapi "github.com/ipfs/go-ipfs-http-client"
+	"github.com/guseggert/clustertest/cluster/local"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -30,11 +28,12 @@ func init() {
 	logger = l.Sugar()
 }
 
+// TestKubo launches a cluster of 4 kubo nodes and verifies that they can all connect to each other.
 func TestKubo(t *testing.T) {
 	ctx := context.Background()
 	// clusterImpl, err := docker.NewCluster("ubuntu", docker.WithLogger(logger))
-	// clusterImpl, err := local.NewCluster()
-	clusterImpl, err := aws.NewCluster()
+	clusterImpl, err := local.NewCluster()
+	// clusterImpl, err := aws.NewCluster()
 	require.NoError(t, err)
 
 	bc, err := cluster.New(clusterImpl, cluster.WithLogger(logger))
@@ -49,6 +48,7 @@ func TestKubo(t *testing.T) {
 	nodes, err := c.NewNodes(ctx, len(versions))
 	require.NoError(t, err)
 
+	// For each version, load the Kubo binary, initialize the repo, and run the daemon.
 	group, groupCtx := errgroup.WithContext(ctx)
 	daemonCtx, daemonCancel := context.WithCancel(ctx)
 	daemonGroup, daemonGroupCtx := errgroup.WithContext(daemonCtx)
@@ -79,22 +79,42 @@ func TestKubo(t *testing.T) {
 	}
 	require.NoError(t, group.Wait())
 
-	var apiClients []*shell.Shell
-	var httpClients []*httpapi.HttpApi
+	// verify that the versions are what we expect
 	actualVersions := map[string]bool{}
 	for _, node := range nodes {
 		apiClient, err := node.RPCAPIClient(ctx)
 		require.NoError(t, err)
-		httpClient, err := node.RPCHTTPClient(ctx)
-		require.NoError(t, err)
 		vers, _, err := apiClient.Version()
 		require.NoError(t, err)
 		actualVersions[vers] = true
-		apiClients = append(apiClients, apiClient)
-		httpClients = append(httpClients, httpClient)
 	}
 
-	for fromIdx, from := range nodes {
+	expectedVersions := map[string]bool{
+		"0.18.0-rc1": true,
+		"0.17.0":     true,
+		"0.16.0":     true,
+		"0.15.0":     true,
+	}
+	assert.Equal(t, expectedVersions, actualVersions)
+
+	ensureConnected := func(from *Node, to *Node) {
+		connected := false
+		httpClient, err := from.RPCHTTPClient(ctx)
+		require.NoError(t, err)
+		fromCIs, err := httpClient.Swarm().Peers(ctx)
+		require.NoError(t, err)
+		for _, ci := range fromCIs {
+			toAI, err := to.AddrInfo(ctx)
+			require.NoError(t, err)
+			if ci.ID() == toAI.ID {
+				connected = true
+			}
+		}
+		assert.True(t, connected)
+	}
+
+	// Connect every node to every other node, then verify that the connect succeded
+	for _, from := range nodes {
 		for _, to := range nodes {
 			fromAI, err := from.AddrInfo(ctx)
 			require.NoError(t, err)
@@ -107,51 +127,18 @@ func TestKubo(t *testing.T) {
 
 			RemoveLocalAddrs(toAI)
 
-			err = apiClients[fromIdx].SwarmConnect(ctx, toAI.Addrs[0].String())
+			apiClient, err := from.RPCAPIClient(ctx)
 			require.NoError(t, err)
+
+			err = apiClient.SwarmConnect(ctx, toAI.Addrs[0].String())
+			require.NoError(t, err)
+
+			// TODO poll, don't sleep
+			time.Sleep(1 * time.Second)
+
+			ensureConnected(from, to)
 		}
 	}
-
-	ensureConnected := func(fromIdx int, to *Node) {
-		connected := false
-		fromCIs, err := httpClients[fromIdx].Swarm().Peers(ctx)
-		require.NoError(t, err)
-		for _, ci := range fromCIs {
-			toAI, err := to.AddrInfo(ctx)
-			require.NoError(t, err)
-			if ci.ID() == toAI.ID {
-				connected = true
-			}
-		}
-		assert.True(t, connected)
-	}
-
-	time.Sleep(1 * time.Second)
-	for fromIdx, from := range nodes {
-		for _, to := range nodes {
-			fromAI, err := from.AddrInfo(ctx)
-			require.NoError(t, err)
-			toAI, err := to.AddrInfo(ctx)
-			require.NoError(t, err)
-
-			if fromAI.ID == toAI.ID {
-				continue
-			}
-
-			ensureConnected(fromIdx, to)
-
-			fmt.Printf("%s is connected to %s\n", from.Node, to.Node)
-		}
-	}
-
-	expectedVersions := map[string]bool{
-		"0.18.0-rc1": true,
-		"0.17.0":     true,
-		"0.16.0":     true,
-		"0.15.0":     true,
-	}
-
-	assert.Equal(t, expectedVersions, actualVersions)
 
 	// cancel the context and observe that daemons exit
 	daemonCancel()
