@@ -290,6 +290,7 @@ func (a *NodeAgent) postFile(w http.ResponseWriter, r *http.Request, params http
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer f.Close()
 
 	_, err = io.Copy(f, r.Body)
 	if err != nil {

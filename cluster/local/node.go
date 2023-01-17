@@ -101,6 +101,7 @@ func (n *Node) SendFile(ctx context.Context, filePath string, contents io.Reader
 	if err != nil {
 		return fmt.Errorf("creating file %q: %w", filePath, err)
 	}
+	defer f.Close()
 
 	_, err = io.Copy(f, contents)
 

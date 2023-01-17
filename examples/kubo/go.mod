@@ -104,3 +104,4 @@ require (
 )
 
 replace github.com/guseggert/clustertest => ../..
+
