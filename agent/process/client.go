@@ -134,6 +134,10 @@ func (r *clientProcRunner) run() (*Process, error) {
 }
 
 func (r *clientProcRunner) close(code websocket.StatusCode, reason string) {
+	// websocket reason can't be above 123 chars
+	if len(reason) > 100 {
+		reason = reason[0:100]
+	}
 	r.closeConnOnce.Do(func() {
 		err := r.conn.Close(code, reason)
 		if err != nil {
