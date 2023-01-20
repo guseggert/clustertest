@@ -29,10 +29,10 @@ func TestHelloWorld(t *testing.T) {
 	clusterImpl, _ := local.NewCluster()
 
 	// setup a BasicCluster which has a much richer API than barebones clusters
-	cluster, _ := cluster.New(clusterImpl)
+	c, _ := cluster.New(clusterImpl)
 
 	// destroy the nodes and cluster after the test
-	t.Cleanup(func() { cluster.Cleanup(ctx) })
+	t.Cleanup(func() { c.Cleanup(ctx) })
 
 	// create a new node
 	node, _ := c.NewNode(ctx)
