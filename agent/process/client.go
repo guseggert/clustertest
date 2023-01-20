@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 
+	clusteriface "github.com/guseggert/clustertest/cluster"
 	"go.uber.org/zap"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
@@ -29,10 +30,10 @@ type StartProcRequest struct {
 }
 
 type Process struct {
-	wait func(ctx context.Context) (int, error)
+	wait func(ctx context.Context) (*clusteriface.ProcessResult, error)
 }
 
-func (p *Process) Wait(ctx context.Context) (int, error) { return p.wait(ctx) }
+func (p *Process) Wait(ctx context.Context) (*clusteriface.ProcessResult, error) { return p.wait(ctx) }
 
 func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process, error) {
 	c.Logger.Debugw("dialing WebSocket for run", "URL", c.URL)
@@ -114,19 +115,19 @@ func (r *clientProcRunner) run() (*Process, error) {
 	go r.readMessages()
 
 	return &Process{
-		wait: func(ctx context.Context) (int, error) {
+		wait: func(ctx context.Context) (*clusteriface.ProcessResult, error) {
 			select {
 			case res := <-r.resultCh:
 				r.log.Debugf("got exit code %d with err: %s", res.code, res.err)
-				return res.code, res.err
+				return &clusteriface.ProcessResult{ExitCode: res.code, TimeMS: res.timeMS}, res.err
 			case <-ctx.Done():
 				err := ctx.Err()
 				r.log.Debugf("wait context done: %s", err)
-				return -1, err
+				return nil, err
 			case <-r.ctx.Done():
 				err := r.ctx.Err()
 				r.log.Debugf("runResult context done: %s", err)
-				return -1, err
+				return nil, err
 			}
 		},
 	}, nil
@@ -208,7 +209,7 @@ func (r *clientProcRunner) readMessages() {
 			closeStdout()
 		}
 		if msg.Exited {
-			r.resultCh <- cmdResult{code: msg.ExitCode}
+			r.resultCh <- cmdResult{code: msg.ExitCode, timeMS: msg.TimeMS}
 			r.close(websocket.StatusNormalClosure, "")
 			return
 		}
@@ -280,28 +281,8 @@ func (r *clientProcRunner) readStderr() {
 	}
 }
 
-type noopWriteCloser struct{ io.Writer }
-
-func (c *noopWriteCloser) Close() error { return nil }
-
-type cmdResultWaiter struct {
-	logger         *zap.SugaredLogger
-	procResultChan chan cmdResult
-}
-
 type cmdResult struct {
-	code int
-	err  error
-}
-
-func (r *cmdResultWaiter) Wait(ctx context.Context) (int, error) {
-	select {
-	case pr := <-r.procResultChan:
-		r.logger.Debugf("runResult got proc result: %+v", pr)
-		return pr.code, pr.err
-	case <-ctx.Done():
-		err := ctx.Err()
-		r.logger.Debugf("runResult context canceled: %s", err)
-		return -1, err
-	}
+	code   int
+	timeMS int64
+	err    error
 }

@@ -73,17 +73,17 @@ type BasicNode struct {
 	Log *zap.SugaredLogger
 }
 
-// Run starts the given command on the node and waits for the process to exit, returning its exit code.
-func (n *BasicNode) Run(ctx context.Context, req StartProcRequest) (int, error) {
+// Run starts the given command on the node and waits for the process to exit.
+func (n *BasicNode) Run(ctx context.Context, req StartProcRequest) (*ProcessResult, error) {
 	proc, err := n.StartProc(ctx, req)
 	if err != nil {
-		return -1, err
+		return nil, err
 	}
-	code, err := proc.Wait(ctx)
-	if code != 0 {
-		return -1, fmt.Errorf("non-zero exit code %d: %w", code, err)
+	res, err := proc.Wait(ctx)
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("non-zero exit code %d: %w", res.ExitCode, err)
 	}
-	return code, nil
+	return res, nil
 }
 
 // RootDir returns the root directory of the node.

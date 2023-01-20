@@ -347,6 +347,7 @@ type PostCommandRequest struct {
 
 type PostCommandResponse struct {
 	ExitCode int
+	TimeMS   int64
 	Stdout   string
 	Stderr   string
 }
@@ -384,6 +385,7 @@ func (a *NodeAgent) command(w http.ResponseWriter, r *http.Request, params httpr
 		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
 
+	start := time.Now()
 	err = cmd.Start()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -398,9 +400,11 @@ func (a *NodeAgent) command(w http.ResponseWriter, r *http.Request, params httpr
 	}()
 
 	cmd.Wait()
+	exeTime := time.Since(start)
 
 	resp := PostCommandResponse{
 		ExitCode: cmd.ProcessState.ExitCode(),
+		TimeMS:   exeTime.Milliseconds(),
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 	}

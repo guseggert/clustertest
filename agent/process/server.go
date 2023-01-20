@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"nhooyr.io/websocket"
@@ -70,7 +71,7 @@ func (r *serverProcRunner) shutdown() {
 
 func (r *serverProcRunner) run() {
 	// read the first message
-	err := r.readFirstMessageAndStart()
+	startTime, err := r.readFirstMessageAndStart()
 	if err != nil {
 		r.log.Debugf("error reading first message: %s", err)
 		r.conn.Close(websocket.StatusInternalError, fmt.Sprintf("reading first message: %s", err))
@@ -82,7 +83,7 @@ func (r *serverProcRunner) run() {
 	r.wg.Add(3)
 	go r.readMessages()
 	go r.readStdin()
-	go r.waitAndWriteResult()
+	go r.waitAndWriteResult(startTime)
 
 	r.wg.Wait()
 }
@@ -130,10 +131,11 @@ func (r *serverProcRunner) readMessages() {
 	}
 }
 
-func (r *serverProcRunner) waitAndWriteResult() {
+func (r *serverProcRunner) waitAndWriteResult(startTime time.Time) {
 	defer r.wg.Done()
 
 	err := r.cmd.Wait()
+	timeMS := time.Since(startTime).Milliseconds()
 
 	exitCode := r.cmd.ProcessState.ExitCode()
 	if err != nil {
@@ -145,17 +147,18 @@ func (r *serverProcRunner) waitAndWriteResult() {
 	err = wsjson.Write(r.ctx, r.conn, procResponseMessage{
 		Exited:   true,
 		ExitCode: exitCode,
+		TimeMS:   timeMS,
 	})
 	if err != nil {
 		r.log.Debugf("error sending exit code: %s", err)
 	}
 }
 
-func (r *serverProcRunner) readFirstMessageAndStart() error {
+func (r *serverProcRunner) readFirstMessageAndStart() (time.Time, error) {
 	var req procRequestMessage
 	err := wsjson.Read(r.ctx, r.conn, &req)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	r.log.Debugw("got first message", "Message", req)
 
@@ -189,7 +192,7 @@ func (r *serverProcRunner) readFirstMessageAndStart() error {
 
 	r.cmd = cmd
 
-	return cmd.Start()
+	return time.Now(), cmd.Start()
 }
 
 func (r *serverProcRunner) readStdin() {

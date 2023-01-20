@@ -8,7 +8,12 @@ import (
 
 type Process interface {
 	// Wait waits for the process to exit and returns its exit code.
-	Wait(context.Context) (int, error)
+	Wait(context.Context) (*ProcessResult, error)
+}
+
+type ProcessResult struct {
+	ExitCode int
+	TimeMS   int64
 }
 
 type StartProcRequest struct {

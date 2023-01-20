@@ -26,7 +26,8 @@ type procResponseMessage struct {
 	Stderr     []byte
 	StderrDone bool
 
-	// Exited is true if the process exited. ExitCode must be provided in that case.
+	// Exited is true if the process exited. ExitCode and TimeMS must be provided in that case.
 	Exited   bool
 	ExitCode int
+	TimeMS   int64
 }
