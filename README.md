@@ -111,9 +111,12 @@ Some basic resources need to be setup in your AWS account to run EC2 instances, 
 
 - Install the AWS CDK: https://docs.aws.amazon.com/cdk/v2/guide/work-with.html#work-with-prerequisites
 - `cd cluster/aws/cdk`
+- `cdk bootstrap`
 - `cdk deploy`
 
 This creates the VPC, subnets, EC2 instance role, etc. that will be used for EC2 instances used in the tests. The tests discover these resources automatically as long as you configure them with the same account and region.
+
+The stack needs to be deployed to each account+region you intend to use. This can be controlled using standard AWS SDK environment variables such as `AWS_PROFILE` and `AWS_DEFAULT_REGION`.
 
 It is possible to use SSM here instead of exposing a port, but that is significantly slower.
 
