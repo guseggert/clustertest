@@ -2,14 +2,12 @@ package local
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 
 	clusteriface "github.com/guseggert/clustertest/cluster"
-	"github.com/guseggert/clustertest/internal/files"
 )
 
 // Cluster is a local Cluster that runs processes directly on the underlying host.
@@ -37,16 +35,6 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 }
 
 func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("getting wd: %w", err)
-	}
-
-	nodeAgentBin := files.FindUp("nodeagent", wd)
-	if nodeAgentBin == "" {
-		return nil, errors.New("unable to find nodeagent bin")
-	}
-
 	startID := len(c.nodes)
 	var newNodes []clusteriface.Node
 	for i := 0; i < n; i++ {
