@@ -2,7 +2,7 @@
 
 Clustertest is a framework for orchestrating clusters of nodes for testing. Clusters and state are transient and are destroyed at the end of the test, and cluster/node configuration is imperative and handled as part of test code.
 
-Productivity and minimizing cognitive load are primary design goals of clustertest--we want to spend our mental cycles on domain problems, not on maintaining thousands of lines of Kubernetes YAML and debugging emergent behavior in test clusters.
+Productivity and minimizing cognitive load are primary design goals of clustertest, and it aims to be as simple and transparent as possible.
 
 # Use Cases
 
