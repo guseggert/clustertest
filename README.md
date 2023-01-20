@@ -86,7 +86,6 @@ To create a new cluster implementation, you implement the Cluster and Node inter
 Existing implementations:
 
 - Local (no sandbox)
-  - Not functional yet, still WIP
 - Local Docker containers
 - AWS EC2
 
