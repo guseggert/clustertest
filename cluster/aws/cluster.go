@@ -132,19 +132,7 @@ func provideFileViaS3(sess *session.Session, bucket, path string) (string, error
 	return key, nil
 }
 
-// NewCluster creates a new AWS cluster.
-// This uses standard AWS profile env vars.
-// With no configuration, this uses the default profile.
-// The user/role used must have the appropriate permissions for the test runner,
-// in order to find the resources in the account and launch/destroy EC2 instances.
-//
-// By default, this looks for the node agent binary by searching up from PWD for a "nodeagent" file.
-func NewCluster(opts ...Option) (*Cluster, error) {
-	sess, err := session.NewSessionWithOptions(session.Options{SharedConfigState: session.SharedConfigEnable})
-	if err != nil {
-		return nil, fmt.Errorf("creating AWS Go SDK session: %w", err)
-	}
-
+func NewClusterWithSession(sess *session.Session, opts ...Option) (*Cluster, error) {
 	outputsMap, err := fetchStackOutputs(sess)
 	if err != nil {
 		return nil, fmt.Errorf("fetching stack outputs: %w", err)
@@ -207,6 +195,21 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 	c.NodeAgentS3Key = nodeFilesKey
 
 	return c, nil
+}
+
+// NewCluster creates a new AWS cluster.
+// This uses standard AWS profile env vars.
+// With no configuration, this uses the default profile.
+// The user/role used must have the appropriate permissions for the test runner,
+// in order to find the resources in the account and launch/destroy EC2 instances.
+//
+// By default, this looks for the node agent binary by searching up from PWD for a "nodeagent" file.
+func NewCluster(opts ...Option) (*Cluster, error) {
+	sess, err := session.NewSessionWithOptions(session.Options{SharedConfigState: session.SharedConfigEnable})
+	if err != nil {
+		return nil, fmt.Errorf("creating AWS Go SDK session: %w", err)
+	}
+	return NewClusterWithSession(sess, opts...)
 }
 
 func (c *Cluster) waitForInstances(ctx context.Context, instances []*ec2.Instance) ([]*ec2.Instance, error) {
