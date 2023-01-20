@@ -4,6 +4,8 @@ Clustertest is a framework for orchestrating clusters of nodes for testing. Clus
 
 Productivity and minimizing cognitive load are primary design goals of clustertest, and it aims to be as simple and transparent as possible.
 
+Most importantly, clustertest has no logo.
+
 # Use Cases
 
 Clustertest is designed for tests that:
