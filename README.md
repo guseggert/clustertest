@@ -78,6 +78,8 @@ Examples require a compiled node agent in the repo root, which you can generate 
 make nodeagent
 ```
 
+Also check out https://github.com/guseggert/clustertest-kubo which builds functionality for testing [Kubo](https://github.com/ipfs/kubo) clusters on top of clustertest.
+
 # Cluster Implementations
 To create a new cluster implementation, you implement the Cluster and Node interfaces, which define how to create a node and cluster, and how to run code on them. Most implementations will use the "node agent" (see below), which provides an HTTP interface between the node and the test runner. These implementations should run the node agent on each node and expose its port to the test runner--then the interface implementations merely forward to the node agent client.
 
