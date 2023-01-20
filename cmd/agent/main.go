@@ -34,19 +34,16 @@ func main() {
 				Value: "0.0.0.0:8080",
 			},
 			&cli.StringFlag{
-				Name:     "ca-cert-pem",
-				Usage:    "The CA cert PEM bytes to use (base64-encoded).",
-				Required: true,
+				Name:  "ca-cert-pem",
+				Usage: "The CA cert PEM bytes to use (base64-encoded).",
 			},
 			&cli.StringFlag{
-				Name:     "cert-pem",
-				Usage:    "The cert PEM bytes to use (base64-encoded).",
-				Required: true,
+				Name:  "cert-pem",
+				Usage: "The cert PEM bytes to use (base64-encoded).",
 			},
 			&cli.StringFlag{
-				Name:     "key-pem",
-				Usage:    "The key PEM bytes to use (base64-encoded).",
-				Required: true,
+				Name:  "key-pem",
+				Usage: "The key PEM bytes to use (base64-encoded).",
 			},
 		},
 		Action: func(ctx *cli.Context) error {
@@ -57,17 +54,25 @@ func main() {
 			certPEMEncoded := ctx.String("cert-pem")
 			keyPEMEncoded := ctx.String("key-pem")
 
-			caCertPEMBytes, err := base64.StdEncoding.DecodeString(caCertPEMEncoded)
-			if err != nil {
-				return fmt.Errorf("decoding CA cert PEM: %w", err)
+			var caCertPEMBytes, certPEMBytes, keyPEMBytes []byte
+			var err error
+			if caCertPEMEncoded != "" {
+				caCertPEMBytes, err = base64.StdEncoding.DecodeString(caCertPEMEncoded)
+				if err != nil {
+					return fmt.Errorf("decoding CA cert PEM: %w", err)
+				}
 			}
-			certPEMBytes, err := base64.StdEncoding.DecodeString(certPEMEncoded)
-			if err != nil {
-				return fmt.Errorf("decoding cert PEM: %w", err)
+			if certPEMEncoded != "" {
+				certPEMBytes, err = base64.StdEncoding.DecodeString(certPEMEncoded)
+				if err != nil {
+					return fmt.Errorf("decoding cert PEM: %w", err)
+				}
 			}
-			keyPEMBytes, err := base64.StdEncoding.DecodeString(keyPEMEncoded)
-			if err != nil {
-				return fmt.Errorf("decoding key PEM: %w", err)
+			if keyPEMEncoded != "" {
+				keyPEMBytes, err = base64.StdEncoding.DecodeString(keyPEMEncoded)
+				if err != nil {
+					return fmt.Errorf("decoding key PEM: %w", err)
+				}
 			}
 
 			var heartbeatFailureHandler func()
@@ -88,14 +93,13 @@ func main() {
 			}
 
 			agent, err := agent.NewNodeAgent(
-				caCertPEMBytes,
-				certPEMBytes,
-				keyPEMBytes,
+				agent.WithCerts(caCertPEMBytes, certPEMBytes, keyPEMBytes),
 				agent.WithLogLevel(zapcore.DebugLevel),
 				agent.WithHeartbeatTimeout(heartbeatTimeout),
 				agent.WithListenAddr(listenAddr),
 				agent.WithHeartbeatFailureHandler(heartbeatFailureHandler),
 			)
+
 			if err != nil {
 				return fmt.Errorf("building agent: %w", err)
 			}
