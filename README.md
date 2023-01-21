@@ -135,37 +135,11 @@ The node agent uses mTLS for authn, authz, and traffic encryption, using a uniqu
 
 # Questions
 ## What about other programming languages?
-Clustertest is agnostic to the programming language of the system under test, since the Node API only cares about running processes and network connections.
+Clustertest is agnostic to the programming language of the system under test.
 
-The default test runner implementation is Go, which means that tests themselves are written in Go. Writing a new test runner in another language is relatively easy, though:
+The default test runner implementation is Go, which means that tests themselves are written in Go.
+
+Writing a new test runner in another language is relatively easy, though:
 
 - Write a node agent HTTP client
-- Write Cluster & Node implementations
-
-The Cluster & Node implementations communicate with some specific backend like Docker or AWS to manage nodes. These are generally simple implementations that launch a node and install the node agent.
-
-Consider also that, in scenarios with complex requirements, Cluster implementations can do more complex things such as running other agents/servers/processes on each node, run on top of container orchestrators like Docker compose or k8s, run coordinator nodes, or even delegate cluster & node to another process via RPC. Clustertest allows this type of complexity to reuse code across programming languages, but does not mandate it.
-
-# Background
-Clustertest grew out of frustration with [Testground](https://github.com/testground/testground), which is difficult to use for a number of reasons:
-
-- Tests are declarative, with many intermediate layers of declarative abstractions (TOML composition files, k8s YAML files, Dockerfiles, etc.)
-- The backing implementation uses Kubernetes, which is complex and stateful
-  - Kubernetes clusters are also costly--just running the basic setup resulted in 5 new EC2 instances running forever in my account! (And lovely AWS bills.)
-- There is no central coordinator, so desired behavior is emergent behavior of the system, making writing and debugging tests difficult--you are coding a distributed state machine.
-
-The result of all this is a mountain of TOML, YAML, and Dockerfile config files, along with no central view of the expected test behavior, which makes it difficult to understand even simple tests.
-
-Clustertest strives for simplicity and minimizing cognitive load with the following contrasting design principles:
-
-- Tests are imperative, not declarative. 
-  - You tell nodes what to do, and when. The behavior of the system is explicit, not implicit.
-  - The test code is the central coordinator, deciding how to create the cluster, directing nodes, and collecting results.
-  - No config file hell (unless you want it...clustertest could certainly be backed by k8s)
-- Favor minimizing state and using transitory resources
-  - Pay $0 when not actively running tests
-  - This can be any cloud provider with an API for running hosts/containers
-  - Work directly and imperatively with resources instead of indirectly and declaratively via Kubernetes
-  - Test results, metrics, logs, etc. collected directly by the test runner
-  
-Clustertest is more similar to [IPTB](https://github.com/ipfs/iptb) than Testground, but uses a programming language instead of a CLI, runs in-process, and works on remote clusters.
+- Write a test runner that launches nodes with the node agent
