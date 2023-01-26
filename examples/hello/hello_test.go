@@ -73,10 +73,10 @@ func TestHello(t *testing.T) {
 						return
 					}
 
-					exitCode, err := proc.Wait(ctx)
+					res, err := proc.Wait(ctx)
 
 					assert.NoError(t, err)
-					assert.Equal(t, 0, exitCode)
+					assert.Equal(t, 0, res.ExitCode)
 					assert.Equal(t, "hello", stdout.String())
 
 				}(i, node)

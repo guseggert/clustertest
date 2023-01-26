@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -51,29 +49,8 @@ func (n *Node) Fetch(ctx context.Context, url, path string) error {
 	return n.agentClient.Fetch(ctx, url, path)
 }
 
-func (n *Node) StartHeartbeat() {
-	go n.heartbeatOnce.Do(func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-n.stopHeartbeat:
-				return
-			case <-ticker.C:
-			}
-			err := n.Heartbeat(context.Background())
-			if err != nil {
-				log.Printf("heartbeat error: %s", err)
-			}
-		}
-	})
-}
-
-func (n *Node) StopHeartbeat() {
-	n.stopHeartbeatOnce.Do(func() { close(n.stopHeartbeat) })
-}
-
 func (n *Node) Stop(ctx context.Context) error {
+	n.agentClient.StopHeartbeat()
 	_, err := n.ec2Client.TerminateInstancesWithContext(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []*string{&n.instanceID},
 	})

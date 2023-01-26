@@ -41,6 +41,7 @@ nohup ./nodeagent \
 `
 
 type Cluster struct {
+	Nodes                   []*Node
 	Log                     *zap.SugaredLogger
 	InstanceProfileARN      string
 	InstanceSecurityGroupID string
@@ -338,7 +339,8 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 		}
 		nodes = append(nodes, node)
 		ifaceNodes = append(ifaceNodes, node)
-
+		c.Nodes = append(c.Nodes, node)
+		node.agentClient.StartHeartbeat()
 	}
 
 	err = c.waitForNodesHeartbeats(ctx, nodes)
@@ -391,5 +393,11 @@ func (c *Cluster) NewNode(ctx context.Context) (clusteriface.Node, error) {
 }
 
 func (c *Cluster) Cleanup(ctx context.Context) error {
+	for _, n := range c.Nodes {
+		err := n.Stop(ctx)
+		if err != nil {
+			return fmt.Errorf("stopping node %s: %w", n, err)
+		}
+	}
 	return nil
 }

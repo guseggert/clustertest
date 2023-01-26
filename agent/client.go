@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
 	"net"
 	"net/http"
 	"os"
 	"path"
+	"sync"
 	"time"
 
 	"github.com/guseggert/clustertest/agent/process"
@@ -31,6 +33,10 @@ type Client struct {
 	commandClient   *process.Client
 
 	waitInterval time.Duration
+
+	startHeartbeatOnce sync.Once
+	stopHeartbeatOnce  sync.Once
+	stopHeartbeat      chan struct{}
 }
 
 type ClientOption func(c *Client)
@@ -102,7 +108,8 @@ func NewClient(log *zap.SugaredLogger, certs *Certs, ipAddr string, port int, op
 			URL:        commandURL,
 			Logger:     log.Named("nodeagent_command_client"),
 		},
-		waitInterval: 100 * time.Millisecond,
+		waitInterval:  100 * time.Millisecond,
+		stopHeartbeat: make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -286,4 +293,26 @@ func (c *Client) WaitForServer(ctx context.Context) error {
 			c.Logger.Debugf("got heartbeat error: %s", err)
 		}
 	}
+}
+
+func (n *Client) StartHeartbeat() {
+	go n.startHeartbeatOnce.Do(func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-n.stopHeartbeat:
+				return
+			case <-ticker.C:
+			}
+			err := n.SendHeartbeat(context.Background())
+			if err != nil {
+				n.Logger.Errorf("heartbeat error: %s", err)
+			}
+		}
+	})
+}
+
+func (n *Client) StopHeartbeat() {
+	n.stopHeartbeatOnce.Do(func() { close(n.stopHeartbeat) })
 }

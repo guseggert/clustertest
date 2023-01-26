@@ -50,7 +50,12 @@ func (n *Node) ReadFile(ctx context.Context, path string) (io.ReadCloser, error)
 }
 
 func (n *Node) Stop(ctx context.Context) error {
-	err := n.dockerClient.ContainerRemove(ctx, n.ContainerID, types.ContainerRemoveOptions{
+	n.agentClient.StopHeartbeat()
+	err := n.dockerClient.ContainerStop(ctx, n.ContainerID, nil)
+	if err != nil {
+		return fmt.Errorf("stopping node %d: %w", n.ID, err)
+	}
+	err = n.dockerClient.ContainerRemove(ctx, n.ContainerID, types.ContainerRemoveOptions{
 		RemoveVolumes: true,
 		Force:         true,
 	})

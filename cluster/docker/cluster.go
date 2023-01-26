@@ -194,6 +194,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 
 		newNodes = append(newNodes, node)
 		c.Nodes = append(c.Nodes, node)
+		node.agentClient.StartHeartbeat()
 	}
 
 	for _, n := range newNodes {
@@ -204,9 +205,9 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 
 func (c *Cluster) Cleanup(ctx context.Context) error {
 	for _, n := range c.Nodes {
-		err := c.DockerClient.ContainerStop(ctx, n.ContainerID, nil)
+		err := n.Stop(ctx)
 		if err != nil {
-			return fmt.Errorf("stopping node %d: %w", n.ID, err)
+			return fmt.Errorf("stopping node %s: %w", n, err)
 		}
 	}
 	return nil
