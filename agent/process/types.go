@@ -1,5 +1,7 @@
 package process
 
+import "syscall"
+
 // procRequestMessage is a request message.
 // Only the first message needs to contain the command, args, env, wd, etc.
 // Subsequent messages can contain only stdin bytes, for streaming stdin.
@@ -7,8 +9,7 @@ type procRequestMessage struct {
 	Stdin     []byte
 	StdinDone bool
 
-	StopSendingStderr bool
-	StopSendingStdout bool
+	Signal syscall.Signal
 
 	Command string
 	Args    []string

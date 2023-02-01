@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"github.com/guseggert/clustertest/agent"
 	clusteriface "github.com/guseggert/clustertest/cluster"
@@ -55,13 +54,13 @@ func (n *Node) Stop(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("stopping node %d: %w", n.ID, err)
 	}
-	err = n.dockerClient.ContainerRemove(ctx, n.ContainerID, types.ContainerRemoveOptions{
-		RemoveVolumes: true,
-		Force:         true,
-	})
-	if err != nil {
-		return fmt.Errorf("killing container %q: %w", n.ContainerID, err)
-	}
+	// err = n.dockerClient.ContainerRemove(ctx, n.ContainerID, types.ContainerRemoveOptions{
+	// 	RemoveVolumes: true,
+	// 	Force:         true,
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("killing container %q: %w", n.ContainerID, err)
+	// }
 	return nil
 }
 

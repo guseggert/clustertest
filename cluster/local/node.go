@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	clusteriface "github.com/guseggert/clustertest/cluster"
@@ -26,10 +27,12 @@ type result struct {
 }
 
 type proc struct {
-	wait func(context.Context) (*clusteriface.ProcessResult, error)
+	wait   func(context.Context) (*clusteriface.ProcessResult, error)
+	signal func(context.Context, syscall.Signal) error
 }
 
 func (p *proc) Wait(ctx context.Context) (*clusteriface.ProcessResult, error) { return p.wait(ctx) }
+func (p *proc) Signal(ctx context.Context, sig syscall.Signal) error          { return p.signal(ctx, sig) }
 
 func (n *Node) StartProc(ctx context.Context, req clusteriface.StartProcRequest) (clusteriface.Process, error) {
 	cmd := exec.Command(req.Command, req.Args...)
@@ -90,6 +93,18 @@ func (n *Node) StartProc(ctx context.Context, req clusteriface.StartProcRequest)
 			case res := <-resultChan:
 				return &clusteriface.ProcessResult{ExitCode: res.code, TimeMS: res.timeMS}, res.err
 			}
+		},
+		signal: func(ctx context.Context, s syscall.Signal) error {
+			var sig os.Signal
+			switch s {
+			case syscall.SIGINT:
+				sig = os.Interrupt
+			case syscall.SIGKILL:
+				sig = os.Kill
+			default:
+				return fmt.Errorf("unsupported signal %d", s)
+			}
+			return cmd.Process.Signal(sig)
 		},
 	}, nil
 }

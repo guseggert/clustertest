@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -127,6 +128,18 @@ func (r *serverProcRunner) readMessages() {
 		if msg.StdinDone && !closedStdin {
 			close(r.stdinCh)
 			closedStdin = true
+		}
+		if msg.Signal != 0 {
+			var sig os.Signal
+			switch msg.Signal {
+			case syscall.SIGINT:
+				sig = os.Interrupt
+			case syscall.SIGKILL:
+				sig = os.Kill
+			default:
+				r.log.Debugf("unknown signal type %d, ignoring", msg.Signal)
+			}
+			_ = r.cmd.Process.Signal(sig)
 		}
 	}
 }

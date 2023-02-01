@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"sync"
 
 	"strconv"
 	"time"
@@ -39,35 +40,39 @@ func randString(n int) string {
 // The underlying host must have a Docker daemon running.
 // This supports standard environment variables for configuring the Docker client (DOCKER_HOST etc.).
 type Cluster struct {
-	Log             *zap.SugaredLogger
-	Certs           *agent.Certs
-	NodeAgentBin    string
-	BaseImage       string
-	ContainerPrefix string
-	DockerClient    *client.Client
+	Log              *zap.SugaredLogger
+	Certs            *agent.Certs
+	NodeAgentBin     string
+	BaseImage        string
+	ContainerPrefix  string
+	DockerClient     *client.Client
+	RemoveContainers bool
 
-	Nodes []*Node
+	nodesMut      sync.Mutex
+	Nodes         []*Node
+	nodeIDcounter int
 
 	imagePulled bool
 }
 
-type Option func(c *Cluster)
-
-func WithLogger(l *zap.SugaredLogger) Option {
-	return func(c *Cluster) {
-		c.Log = l.Named("docker_cluster")
-	}
+func (c *Cluster) WithLogger(l *zap.SugaredLogger) *Cluster {
+	c.Log = l.Named("docker_cluster")
+	return c
 }
 
-func WithNodeAgentBin(p string) Option {
-	return func(c *Cluster) {
-		c.NodeAgentBin = p
-	}
+func (c *Cluster) WithNodeAgentBin(p string) *Cluster {
+	c.NodeAgentBin = p
+	return c
+}
+
+func (c *Cluster) WithBaseImage(img string) *Cluster {
+	c.BaseImage = img
+	return c
 }
 
 // NewCluster creates a new local Docker cluster.
 // By default, this looks for the node agent binary by searching up from PWD for a "nodeagent" file.
-func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
+func NewCluster() (*Cluster, error) {
 	log, err := zap.NewProduction()
 	if err != nil {
 		return nil, fmt.Errorf("instantiating default logger: %w", err)
@@ -82,16 +87,12 @@ func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
 	}
 	c := &Cluster{
 		Certs:           cert,
-		BaseImage:       baseImage,
+		BaseImage:       "fedora", // default to fedora b/c it includes curl
 		DockerClient:    dockerClient,
 		ContainerPrefix: randString(6),
 	}
 
-	WithLogger(log.Sugar())(c)
-
-	for _, o := range opts {
-		o(c)
-	}
+	c = c.WithLogger(log.Sugar())
 
 	if c.NodeAgentBin == "" {
 		nab, err := files.FindNodeAgentBin()
@@ -102,6 +103,14 @@ func NewCluster(baseImage string, opts ...Option) (*Cluster, error) {
 	}
 
 	return c, nil
+}
+
+func MustNewCluster() *Cluster {
+	c, err := NewCluster()
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 func (c *Cluster) ensureImagePulled(ctx context.Context) error {
@@ -130,7 +139,11 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 		return nil, fmt.Errorf("pulling image: %w", err)
 	}
 
-	startID := len(c.Nodes)
+	c.nodesMut.Lock()
+	c.nodeIDcounter += 1
+	startID := c.nodeIDcounter
+	c.nodesMut.Unlock()
+
 	var newNodes []clusteriface.Node
 	for i := 0; i < n; i++ {
 		id := startID + i
@@ -193,7 +206,11 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 		}
 
 		newNodes = append(newNodes, node)
+
+		c.nodesMut.Lock()
 		c.Nodes = append(c.Nodes, node)
+		c.nodesMut.Unlock()
+
 		node.agentClient.StartHeartbeat()
 	}
 
@@ -204,7 +221,13 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 }
 
 func (c *Cluster) Cleanup(ctx context.Context) error {
-	for _, n := range c.Nodes {
+	c.nodesMut.Lock()
+	nodes := c.Nodes
+	c.Nodes = nil
+	c.nodeIDcounter = 0
+	c.nodesMut.Unlock()
+
+	for _, n := range nodes {
 		err := n.Stop(ctx)
 		if err != nil {
 			return fmt.Errorf("stopping node %s: %w", n, err)

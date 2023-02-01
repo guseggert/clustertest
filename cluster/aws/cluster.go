@@ -3,12 +3,8 @@ package aws
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base32"
 	"encoding/base64"
 	"fmt"
-	"io"
-	"os"
 	"sync"
 	"text/template"
 	"time"
@@ -19,10 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/guseggert/clustertest/agent"
 	clusteriface "github.com/guseggert/clustertest/cluster"
-	"github.com/guseggert/clustertest/internal/files"
 	"go.uber.org/zap"
 )
 
@@ -32,7 +26,7 @@ cd /node
 curl --retry 3 '{{.NodeAgentURL}}' > nodeagent
 chmod +x nodeagent
 nohup ./nodeagent \
-  --heartbeat-timeout 10m \
+  --heartbeat-timeout 1m \
   --on-heartbeat-failure shutdown \
   --ca-cert-pem {{.CACertPEMEncoded}} \
   --cert-pem {{.CertPEMEncoded}} \
@@ -41,22 +35,14 @@ nohup ./nodeagent \
 `
 
 type Cluster struct {
-	Nodes                   []*Node
-	Log                     *zap.SugaredLogger
-	InstanceProfileARN      string
-	InstanceSecurityGroupID string
-	InstanceType            string
-	AMIID                   string
-	AccountID               string
-	SubnetID                string
-	Session                 *session.Session
-	NodeAgentBin            string
-	NodeAgentS3Bucket       string
-	NodeAgentS3Key          string
-	EC2Client               *ec2.EC2
-	S3Client                *s3.S3
-	RunInstancesConfig      func(*ec2.RunInstancesInput) error
-	Cert                    *agent.Certs
+	Nodes []*Node
+
+	InstanceType       string
+	CleanupWait        bool
+	RunInstancesConfig func(*ec2.RunInstancesInput) error
+
+	ctx    context.Context
+	config *config
 }
 
 func collectPages[IN any, OUT any](input IN, fn func(IN, func(OUT, bool) bool) error) ([]OUT, error) {
@@ -77,125 +63,44 @@ func collectPagesWithContext[IN any, OUT any](ctx context.Context, input IN, fn 
 	return out, err
 }
 
-func fetchAMIID(sess *session.Session) (string, error) {
-	ssmClient := ssm.New(sess)
-	ssmKey := "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
-	res, err := ssmClient.GetParameters(&ssm.GetParametersInput{Names: []*string{&ssmKey}})
-	if err != nil {
-		return "", fmt.Errorf("fetching AMI ID: %w", err)
-	}
-	return *res.Parameters[0].Value, nil
-}
-
 type Option func(c *Cluster)
 
 // WithRunInstancesInput registers a callback for customizing RunInstances calls when new nodes are created.
-func WithRunInstancesInput(f func(input *ec2.RunInstancesInput) error) Option {
-	return func(c *Cluster) {
-		c.RunInstancesConfig = f
-	}
+func (c *Cluster) WithRunInstancesInput(f func(input *ec2.RunInstancesInput) error) *Cluster {
+	c.RunInstancesConfig = f
+	return c
 }
 
-func WithLogger(l *zap.SugaredLogger) Option {
-	return func(c *Cluster) {
-		c.Log = l.Named("ec2_cluster")
-	}
+func (c *Cluster) WithLogger(l *zap.SugaredLogger) *Cluster {
+	c.config.log = l.Named("ec2_cluster")
+	return c
 }
 
-// provideFileViaS3 uploads the file at the path to S3 with a random key, and returns the key.
-func provideFileViaS3(sess *session.Session, bucket, path string) (string, error) {
-	s3Client := s3.New(sess)
-
-	// use the hash of the file as the key for deduping
-	hasher := sha256.New()
-	f, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("opening to compute S3 key: %w", err)
-	}
-	_, err = io.Copy(hasher, f)
-	if err != nil {
-		return "", fmt.Errorf("hashing file to write to S3: %w", err)
-	}
-	key := base32.StdEncoding.EncodeToString(hasher.Sum(nil))
-
-	f, err = os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("opening to send to S3: %w", err)
-	}
-	_, err = s3Client.PutObject(&s3.PutObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-		Body:   f,
-	})
-	if err != nil {
-		return "", fmt.Errorf("putting to S3: %w", err)
-	}
-	return key, nil
+func (c *Cluster) WithInstanceType(s string) *Cluster {
+	c.InstanceType = s
+	return c
 }
 
-func NewClusterWithSession(sess *session.Session, opts ...Option) (*Cluster, error) {
-	outputsMap, err := fetchStackOutputs(sess)
-	if err != nil {
-		return nil, fmt.Errorf("fetching stack outputs: %w", err)
-	}
+func (c *Cluster) WithSession(sess *session.Session) *Cluster {
+	c.config.session = sess
+	return c
+}
 
-	outputs, err := parseStackOutputs(outputsMap)
-	if err != nil {
-		return nil, fmt.Errorf("parsing stack outputs: %w", err)
-	}
+func (c *Cluster) WithNodeAgentBin(binPath string) *Cluster {
+	c.config.nodeAgentBin = binPath
+	return c
+}
 
-	// TODO: allow pinning the AMI ID
-	amiID, err := fetchAMIID(sess)
-	if err != nil {
-		return nil, fmt.Errorf("fetching AMI ID: %w", err)
-	}
+// WithCleanupWait causes the Cleanup methods to wait for instance termination to succeed before returning.
+func (c *Cluster) WithCleanupWait() *Cluster {
+	c.CleanupWait = true
+	return c
+}
 
-	cert, err := agent.GenerateCerts()
-	if err != nil {
-		return nil, fmt.Errorf("generating cert: %w", err)
-	}
-
-	log, err := zap.NewProduction()
-	if err != nil {
-		return nil, fmt.Errorf("instantiating default logger: %w", err)
-	}
-
-	c := &Cluster{
-		InstanceProfileARN:      outputs.ec2InstanceProfileARN,
-		InstanceSecurityGroupID: outputs.ec2SecurityGroupID,
-		AccountID:               outputs.accountID,
-		SubnetID:                outputs.publicSubnetIDs[0],
-		AMIID:                   amiID,
-		Session:                 sess,
-		EC2Client:               ec2.New(sess),
-		S3Client:                s3.New(sess),
-		InstanceType:            "t3.micro",
-		NodeAgentS3Bucket:       outputs.s3Bucket,
-		Cert:                    cert,
-	}
-
-	WithLogger(log.Sugar())(c)
-
-	for _, o := range opts {
-		o(c)
-	}
-
-	if c.NodeAgentBin == "" {
-		nab, err := files.FindNodeAgentBin()
-		if err != nil {
-			return nil, fmt.Errorf("finding node agent bin: %w", err)
-		}
-		c.NodeAgentBin = nab
-	}
-
-	// upload the node agent to S3
-	nodeFilesKey, err := provideFileViaS3(sess, outputs.s3Bucket, c.NodeAgentBin)
-	if err != nil {
-		return nil, fmt.Errorf("uploading node agent to S3: %w", err)
-	}
-	c.NodeAgentS3Key = nodeFilesKey
-
-	return c, nil
+func (c *Cluster) Context(ctx context.Context) *Cluster {
+	newC := *c
+	newC.ctx = ctx
+	return &newC
 }
 
 // NewCluster creates a new AWS cluster.
@@ -205,12 +110,12 @@ func NewClusterWithSession(sess *session.Session, opts ...Option) (*Cluster, err
 // in order to find the resources in the account and launch/destroy EC2 instances.
 //
 // By default, this looks for the node agent binary by searching up from PWD for a "nodeagent" file.
-func NewCluster(opts ...Option) (*Cluster, error) {
-	sess, err := session.NewSessionWithOptions(session.Options{SharedConfigState: session.SharedConfigEnable})
-	if err != nil {
-		return nil, fmt.Errorf("creating AWS Go SDK session: %w", err)
+func NewCluster() *Cluster {
+	return &Cluster{
+		InstanceType: "t3.micro",
+		ctx:          context.Background(),
+		config:       &config{},
 	}
-	return NewClusterWithSession(sess, opts...)
 }
 
 func (c *Cluster) waitForInstances(ctx context.Context, instances []*ec2.Instance) ([]*ec2.Instance, error) {
@@ -224,7 +129,7 @@ func (c *Cluster) waitForInstances(ctx context.Context, instances []*ec2.Instanc
 		if i != 0 {
 			time.Sleep(1 * time.Second)
 		}
-		out, err := c.EC2Client.DescribeInstancesWithContext(ctx, &ec2.DescribeInstancesInput{
+		out, err := c.config.ec2Client.DescribeInstancesWithContext(ctx, &ec2.DescribeInstancesInput{
 			InstanceIds: instanceIDs,
 		})
 		if err != nil {
@@ -257,9 +162,12 @@ func (c *Cluster) waitForInstances(ctx context.Context, instances []*ec2.Instanc
 }
 
 func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, error) {
-	req, _ := c.S3Client.GetObjectRequest(&s3.GetObjectInput{
-		Bucket: &c.NodeAgentS3Bucket,
-		Key:    &c.NodeAgentS3Key,
+	if err := c.ensureLoaded(); err != nil {
+		return nil, err
+	}
+	req, _ := c.config.s3Client.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: &c.config.nodeAgentS3Bucket,
+		Key:    &c.config.nodeAgentS3Key,
 	})
 	nodeagentURL, err := req.Presign(5 * time.Minute)
 	if err != nil {
@@ -271,9 +179,9 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 		return nil, fmt.Errorf("parsing user data template: %w", err)
 	}
 
-	caCertPEMEncoded := base64.StdEncoding.EncodeToString(c.Cert.CA.CertPEMBytes)
-	certPEMEncoded := base64.StdEncoding.EncodeToString(c.Cert.Server.CertPEMBytes)
-	keyPEMEncoded := base64.StdEncoding.EncodeToString(c.Cert.Server.KeyPEMBytes)
+	caCertPEMEncoded := base64.StdEncoding.EncodeToString(c.config.cert.CA.CertPEMBytes)
+	certPEMEncoded := base64.StdEncoding.EncodeToString(c.config.cert.Server.CertPEMBytes)
+	keyPEMEncoded := base64.StdEncoding.EncodeToString(c.config.cert.Server.KeyPEMBytes)
 
 	buf := &bytes.Buffer{}
 	err = tmpl.Execute(buf, map[string]string{
@@ -290,8 +198,8 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 
 	n64 := int64(n)
 	input := &ec2.RunInstancesInput{
-		ImageId:                           &c.AMIID,
-		IamInstanceProfile:                &ec2.IamInstanceProfileSpecification{Arn: &c.InstanceProfileARN},
+		ImageId:                           &c.config.amiID,
+		IamInstanceProfile:                &ec2.IamInstanceProfileSpecification{Arn: &c.config.instanceProfileARN},
 		InstanceType:                      &c.InstanceType,
 		MaxCount:                          &n64,
 		MinCount:                          &n64,
@@ -300,8 +208,8 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 		NetworkInterfaces: []*ec2.InstanceNetworkInterfaceSpecification{{
 			AssociatePublicIpAddress: aws.Bool(true),
 			DeleteOnTermination:      aws.Bool(true),
-			Groups:                   []*string{&c.InstanceSecurityGroupID},
-			SubnetId:                 &c.SubnetID,
+			Groups:                   []*string{&c.config.instanceSecurityGroupID},
+			SubnetId:                 &c.config.subnetID,
 			DeviceIndex:              aws.Int64(0),
 		}},
 	}
@@ -309,7 +217,7 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 		c.RunInstancesConfig(input)
 	}
 
-	reservations, err := c.EC2Client.RunInstancesWithContext(ctx, input)
+	reservations, err := c.config.ec2Client.RunInstancesWithContext(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("launching instance: %w", err)
 	}
@@ -326,16 +234,17 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 	var ifaceNodes clusteriface.Nodes
 	var nodes []*Node
 	for _, inst := range instances {
-		nodeAgentClient, err := agent.NewClient(c.Log, c.Cert, *inst.PublicIpAddress, 8080)
+		nodeAgentClient, err := agent.NewClient(c.config.log, c.config.cert, *inst.PublicIpAddress, 8080)
 		if err != nil {
 			return nil, fmt.Errorf("constructing node agent client: %w", err)
 		}
 		node := &Node{
 			agentClient: nodeAgentClient,
-			sess:        c.Session,
-			ec2Client:   c.EC2Client,
+			sess:        c.config.session,
+			ec2Client:   c.config.ec2Client,
 			instanceID:  *inst.InstanceId,
-			accountID:   c.AccountID,
+			accountID:   c.config.accountID,
+			cleanupWait: c.CleanupWait,
 		}
 		nodes = append(nodes, node)
 		ifaceNodes = append(ifaceNodes, node)
@@ -385,6 +294,9 @@ func (c *Cluster) waitForNodesHeartbeats(ctx context.Context, nodes []*Node) err
 }
 
 func (c *Cluster) NewNode(ctx context.Context) (clusteriface.Node, error) {
+	if err := c.ensureLoaded(); err != nil {
+		return nil, err
+	}
 	nodes, err := c.NewNodes(ctx, 1)
 	if err != nil {
 		return nil, err
@@ -393,6 +305,9 @@ func (c *Cluster) NewNode(ctx context.Context) (clusteriface.Node, error) {
 }
 
 func (c *Cluster) Cleanup(ctx context.Context) error {
+	if err := c.ensureLoaded(); err != nil {
+		return err
+	}
 	for _, n := range c.Nodes {
 		err := n.Stop(ctx)
 		if err != nil {

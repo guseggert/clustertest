@@ -4,88 +4,68 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/guseggert/clustertest/cluster"
 	"github.com/guseggert/clustertest/cluster/aws"
+	"github.com/guseggert/clustertest/cluster/basic"
 	"github.com/guseggert/clustertest/cluster/docker"
 	"github.com/guseggert/clustertest/cluster/local"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
-// TestHello creates a multi-node cluster,
-// writes a test file on each node,
+// TestHello creates a multi-node cluster, writes a test file on each node,
 // and then cats the contents back to the test runner for verification.
 func TestHello(t *testing.T) {
-	ctx := context.Background()
-
-	awsCluster, err := aws.NewCluster()
-	require.NoError(t, err)
-	dockerCluster, err := docker.NewCluster("ubuntu")
-	require.NoError(t, err)
-	localCluster, err := local.NewCluster()
-	require.NoError(t, err)
-
-	numberNodes := 5
-
-	run := func(t *testing.T, name string, clusterImpl cluster.Cluster) {
+	run := func(t *testing.T, name string, impl cluster.Cluster) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			c, err := cluster.New(clusterImpl)
-			require.NoError(t, err)
+			// Create the cluster.
+			c := basic.New(impl)
+			t.Cleanup(c.MustCleanup)
 
-			if err != nil {
-				t.Fatal(err)
-			}
+			t.Logf("Launching %s nodes", name)
+			nodes := c.MustNewNodes(5)
 
-			t.Cleanup(func() { c.Cleanup(ctx) })
-
-			// Launch the nodes. When this returns, all nodes are ready to use.
-			nodes, err := c.NewNodes(ctx, numberNodes)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Write a test file on each node and "cat" its contents back.
-			wg := sync.WaitGroup{}
-			wg.Add(len(nodes))
+			// In parallel, write a test file on each node and "cat" its contents back.
+			group, groupCtx := errgroup.WithContext(context.Background())
 			for i, node := range nodes {
-				go func(nodeNum int, node *cluster.BasicNode) {
-					defer wg.Done()
+				node := node.Context(groupCtx)
+				i := i
+				group.Go(func() error {
+					t.Logf("sending file to %s node %d", name, i)
 					filePath := filepath.Join(node.RootDir(), "hello")
-					err := node.SendFile(ctx, filePath, bytes.NewBuffer([]byte("hello")))
+					err := node.SendFile(filePath, bytes.NewBuffer([]byte("hello")))
 					if err != nil {
-						t.Errorf("sending file to node %d: %s", nodeNum, err)
-						return
+						return err
 					}
 
+					t.Logf("running 'cat' on %s node %d", name, i)
 					stdout := &bytes.Buffer{}
-					proc, err := node.StartProc(ctx, cluster.StartProcRequest{
+					res, err := node.Run(cluster.StartProcRequest{
 						Command: "cat",
 						Args:    []string{filePath},
 						Stdout:  stdout,
 					})
 					if err != nil {
-						t.Errorf(`running "cat" on node %d: %s`, nodeNum, err)
-						return
+						return err
 					}
-
-					res, err := proc.Wait(ctx)
 
 					assert.NoError(t, err)
 					assert.Equal(t, 0, res.ExitCode)
 					assert.Equal(t, "hello", stdout.String())
-
-				}(i, node)
+					return nil
+				})
 			}
-			wg.Wait()
+			err := group.Wait()
+			if err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
-
-	run(t, "AWS cluster", awsCluster)
-	run(t, "Docker cluster", dockerCluster)
-	run(t, "Local cluster", localCluster)
+	run(t, "local cluster", local.MustNewCluster())
+	run(t, "Docker cluster", docker.MustNewCluster())
+	run(t, "AWS cluster", aws.NewCluster())
 }

@@ -22,9 +22,7 @@ type Cluster struct {
 	env   map[string]string
 }
 
-type Option func(c *Cluster)
-
-func NewCluster(opts ...Option) (*Cluster, error) {
+func NewCluster() (*Cluster, error) {
 	dir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
@@ -32,6 +30,14 @@ func NewCluster(opts ...Option) (*Cluster, error) {
 	return &Cluster{
 		dir: dir,
 	}, nil
+}
+
+func MustNewCluster() *Cluster {
+	c, err := NewCluster()
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, error) {

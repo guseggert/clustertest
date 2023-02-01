@@ -4,11 +4,14 @@ import (
 	"context"
 	"io"
 	"net"
+	"syscall"
 )
 
 type Process interface {
 	// Wait waits for the process to exit and returns its exit code.
 	Wait(context.Context) (*ProcessResult, error)
+	// Sends a signal to the process.
+	Signal(context.Context, syscall.Signal) error
 }
 
 type ProcessResult struct {

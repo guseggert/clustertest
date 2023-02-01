@@ -307,7 +307,7 @@ func (n *Client) StartHeartbeat() {
 			}
 			err := n.SendHeartbeat(context.Background())
 			if err != nil {
-				n.Logger.Errorf("heartbeat error: %s", err)
+				n.Logger.Debugf("heartbeat error: %s", err)
 			}
 		}
 	})

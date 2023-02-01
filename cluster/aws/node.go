@@ -19,6 +19,7 @@ type Node struct {
 	ec2Client   *ec2.EC2
 	accountID   string
 	instanceID  string
+	cleanupWait bool
 
 	heartbeatOnce     sync.Once
 	stopHeartbeatOnce sync.Once
@@ -55,7 +56,15 @@ func (n *Node) Stop(ctx context.Context) error {
 		InstanceIds: []*string{&n.instanceID},
 	})
 	if err != nil {
-		return fmt.Errorf("stopping instance %q: %w", n.instanceID, err)
+		return fmt.Errorf("terminating instance %q: %w", n.instanceID, err)
+	}
+	if n.cleanupWait {
+		err = n.ec2Client.WaitUntilInstanceTerminated(&ec2.DescribeInstancesInput{
+			InstanceIds: []*string{&n.instanceID},
+		})
+		if err != nil {
+			return fmt.Errorf("waiting for instance %q to stop: %w", n.instanceID, err)
+		}
 	}
 	return nil
 }

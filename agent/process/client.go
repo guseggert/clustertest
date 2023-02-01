@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"syscall"
 
 	clusteriface "github.com/guseggert/clustertest/cluster"
 	"go.uber.org/zap"
@@ -30,10 +31,16 @@ type StartProcRequest struct {
 }
 
 type Process struct {
-	wait func(ctx context.Context) (*clusteriface.ProcessResult, error)
+	runner *clientProcRunner
 }
 
-func (p *Process) Wait(ctx context.Context) (*clusteriface.ProcessResult, error) { return p.wait(ctx) }
+func (p *Process) Wait(ctx context.Context) (*clusteriface.ProcessResult, error) {
+	return p.runner.wait(ctx)
+}
+
+func (p *Process) Signal(ctx context.Context, sig syscall.Signal) error {
+	return p.runner.signal(ctx, sig)
+}
 
 func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process, error) {
 	c.Logger.Debugw("dialing WebSocket for run", "URL", c.URL)
@@ -70,7 +77,11 @@ func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process,
 		runner.stderr = req.Stderr
 	}
 
-	return runner.run()
+	err = runner.run()
+	if err != nil {
+		return nil, err
+	}
+	return &Process{runner: runner}, nil
 }
 
 type clientProcRunner struct {
@@ -99,7 +110,7 @@ func (r *clientProcRunner) shutdown() {
 	r.wg.Wait()
 }
 
-func (r *clientProcRunner) run() (*Process, error) {
+func (r *clientProcRunner) run() error {
 	r.wg.Add(2)
 	go r.readStderr()
 	go r.readStdout()
@@ -107,30 +118,35 @@ func (r *clientProcRunner) run() (*Process, error) {
 	err := r.writeFirstMessage()
 	if err != nil {
 		r.shutdown()
-		return nil, fmt.Errorf("writing first message: %w", err)
+		return fmt.Errorf("writing first message: %w", err)
 	}
 
 	r.wg.Add(2)
 	go r.writeStdin()
 	go r.readMessages()
+	return nil
+}
 
-	return &Process{
-		wait: func(ctx context.Context) (*clusteriface.ProcessResult, error) {
-			select {
-			case res := <-r.resultCh:
-				r.log.Debugf("got exit code %d with err: %s", res.code, res.err)
-				return &clusteriface.ProcessResult{ExitCode: res.code, TimeMS: res.timeMS}, res.err
-			case <-ctx.Done():
-				err := ctx.Err()
-				r.log.Debugf("wait context done: %s", err)
-				return nil, err
-			case <-r.ctx.Done():
-				err := r.ctx.Err()
-				r.log.Debugf("runResult context done: %s", err)
-				return nil, err
-			}
-		},
-	}, nil
+func (r *clientProcRunner) wait(ctx context.Context) (*clusteriface.ProcessResult, error) {
+	select {
+	case res := <-r.resultCh:
+		r.log.Debugf("got exit code %d with err: %s", res.code, res.err)
+		return &clusteriface.ProcessResult{ExitCode: res.code, TimeMS: res.timeMS}, res.err
+	case <-ctx.Done():
+		err := ctx.Err()
+		r.log.Debugf("wait context done: %s", err)
+		return nil, err
+	case <-r.ctx.Done():
+		err := r.ctx.Err()
+		r.log.Debugf("runResult context done: %s", err)
+		return nil, err
+	}
+}
+
+func (r *clientProcRunner) signal(ctx context.Context, sig syscall.Signal) error {
+	return wsjson.Write(r.ctx, r.conn, procRequestMessage{
+		Signal: sig,
+	})
 
 }
 
