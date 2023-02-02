@@ -23,14 +23,11 @@ func (n *Node) Context(ctx context.Context) *Node {
 }
 
 func (n *Node) StartProc(req clusteriface.StartProcRequest) (*Process, error) {
-	// We use a bg context here because we don't want to kill the conn (and thus the process) on the context
-	// so that the only way to kill the process is to signal it and wait for it to exit.
-	ctx := context.Background()
-	proc, err := n.Node.StartProc(ctx, req)
+	proc, err := n.Node.StartProc(n.Ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &Process{Process: proc, Ctx: ctx}, nil
+	return &Process{Process: proc, Ctx: n.Ctx}, nil
 }
 
 func (n *Node) MustStartProc(req clusteriface.StartProcRequest) *Process {
