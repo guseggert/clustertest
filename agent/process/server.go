@@ -157,6 +157,7 @@ func (r *serverProcRunner) waitAndWriteResult(startTime time.Time) {
 		}
 	}
 
+	r.log.Debugf("process %d exited with error code %d, sending message", r.cmd.Process.Pid, r.cmd.ProcessState.ExitCode())
 	err = wsjson.Write(r.ctx, r.conn, procResponseMessage{
 		Exited:   true,
 		ExitCode: exitCode,

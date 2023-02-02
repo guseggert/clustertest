@@ -14,6 +14,8 @@ import (
 	"nhooyr.io/websocket/wsjson"
 )
 
+const readLimit = 32768
+
 type Client struct {
 	HTTPClient *http.Client
 	URL        string
@@ -52,6 +54,7 @@ func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process,
 		c.Logger.Debugf("dial error: %s", err)
 		return nil, fmt.Errorf("establishing WebSocket conn to run: %w", err)
 	}
+	wsConn.SetReadLimit(readLimit)
 
 	ctx, cancel := context.WithCancel(ctx)
 	runner := &clientProcRunner{

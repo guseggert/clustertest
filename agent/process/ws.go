@@ -21,10 +21,31 @@ type wsJSONWriter struct {
 
 func (w *wsJSONWriter) Write(b []byte) (int, error) {
 	w.log.Debugf("writing %d bytes", len(b))
-	msg := w.writeMsg(b)
-	err := wsjson.Write(w.ctx, w.conn, &msg)
-	w.log.Debugw("wrote JSON to writer", "Error", err)
-	return len(b), err
+	// break the messages into chunks based on max message size
+	// the write limit is probably over-conservative, we are estimating the final encoded json size
+	writeLimit := readLimit / 3
+	leftToWrite := b
+	for {
+		toWrite := leftToWrite
+		pLen := len(leftToWrite)
+		more := false
+		if pLen > writeLimit {
+			toWrite = toWrite[:writeLimit]
+			leftToWrite = leftToWrite[writeLimit:]
+			more = true
+		}
+		w.log.Debugf("more? %v", more)
+
+		msg := w.writeMsg(toWrite)
+		err := wsjson.Write(w.ctx, w.conn, &msg)
+		if err != nil {
+			return 0, err
+		}
+		if !more {
+			w.log.Debugf("done writing %d bytes", len(b))
+			return len(b), nil
+		}
+	}
 }
 
 func (w *wsJSONWriter) Close() error {
