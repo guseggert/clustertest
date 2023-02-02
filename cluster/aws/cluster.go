@@ -97,6 +97,11 @@ func (c *Cluster) WithCleanupWait() *Cluster {
 	return c
 }
 
+func (c *Cluster) WithAMIID(amiID string) *Cluster {
+	c.config.amiID = amiID
+	return c
+}
+
 func (c *Cluster) Context(ctx context.Context) *Cluster {
 	newC := *c
 	newC.ctx = ctx
