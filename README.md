@@ -25,32 +25,30 @@ Here is a basic clustertest test, using the Go test framework:
 
 ```
 func TestHelloWorld(t *testing.T) {
-	ctx := context.Background()
-
 	// use the "local" implementation
 	clusterImpl, _ := local.NewCluster()
 
 	// setup a BasicCluster which has a much richer API than barebones clusters
-	c, _ := cluster.New(clusterImpl)
+	c := basic.New(clusterImpl)
 
 	// destroy the nodes and cluster after the test
-	t.Cleanup(func() { c.Cleanup(ctx) })
+	t.Cleanup(func() { c.Cleanup() })
 
 	// create a new node
-	node, _ := c.NewNode(ctx)
+	node, _ := c.NewNode()
 
 	// determine the file path, which may differ depending on the implementation
 	path := filepath.Join(node.RootDir(), "hello")
 
 	// send a file to the node
-	node.SendFile(ctx, path, bytes.NewBuffer([]byte("Hello, world!")))
+	node.SendFile(path, bytes.NewBuffer([]byte("Hello, world!")))
 
 	// cat the file and verify stdout
 	stdout := &bytes.Buffer{}
-	exitCode, _ := node.Run(ctx, cluster.StartProcRequest{
+	exitCode, _ := node.Run(cluster.StartProcRequest{
 		Command: "cat",
-		Args: []string{path},
-		Stdout: stdout,
+		Args:    []string{path},
+		Stdout:  stdout,
 	})
 
 	assert.Equal(t, 0, exitCode)
