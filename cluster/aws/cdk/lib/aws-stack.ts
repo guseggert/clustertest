@@ -37,12 +37,17 @@ export class AwsStack extends cdk.Stack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
-        const securityGroup = new ec2.SecurityGroup(this, 'SeurityGroup', {
+        const securityGroup = new ec2.SecurityGroup(this, 'SecurityGroup', {
             vpc: vpc,
         })
 
         securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(8080))
         securityGroup.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(8080))
+        securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(4001))
+        securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.udp(4001))
+        securityGroup.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(4001))
+        securityGroup.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.udp(4001))
+
         securityGroup.addIngressRule(securityGroup, ec2.Port.allTraffic())
 
         // Export the stack ARN, which we can use to lookup the other outputs without having to export them.
