@@ -65,7 +65,7 @@ func TestHello(t *testing.T) {
 			}
 		})
 	}
-	run(t, "local cluster", local.MustNewCluster())
+	run(t, "local cluster", local.NewCluster())
 	run(t, "Docker cluster", docker.MustNewCluster())
 	run(t, "AWS cluster", aws.NewCluster())
 }

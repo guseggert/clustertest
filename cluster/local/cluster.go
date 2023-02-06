@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	clusteriface "github.com/guseggert/clustertest/cluster"
 )
@@ -17,30 +18,35 @@ import (
 // The main benefit from using this is performance, since there are no external processes or resources to create for launching nodes.
 // The performance makes this suitable for fast-feedback unit tests.
 type Cluster struct {
-	dir   string
 	nodes []*Node
 	env   map[string]string
+
+	initMut sync.Mutex
+	dir     string
 }
 
-func NewCluster() (*Cluster, error) {
+func NewCluster() *Cluster {
+	return &Cluster{}
+}
+
+func (c *Cluster) init() error {
+	c.initMut.Lock()
+	defer c.initMut.Unlock()
+	if c.dir != "" {
+		return nil
+	}
 	dir, err := os.MkdirTemp("", "")
 	if err != nil {
-		return nil, fmt.Errorf("creating temp dir: %w", err)
+		return fmt.Errorf("creating temp dir: %w", err)
 	}
-	return &Cluster{
-		dir: dir,
-	}, nil
-}
-
-func MustNewCluster() *Cluster {
-	c, err := NewCluster()
-	if err != nil {
-		panic(err)
-	}
-	return c
+	c.dir = dir
+	return nil
 }
 
 func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, error) {
+	if err := c.init(); err != nil {
+		return nil, err
+	}
 	startID := len(c.nodes)
 	var newNodes []clusteriface.Node
 	for i := 0; i < n; i++ {
@@ -65,6 +71,9 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 }
 
 func (c *Cluster) Cleanup(ctx context.Context) error {
+	if err := c.init(); err != nil {
+		return err
+	}
 	for _, node := range c.nodes {
 		err := node.Stop(ctx)
 		if err != nil {

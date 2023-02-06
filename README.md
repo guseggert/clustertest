@@ -25,27 +25,24 @@ Here is a basic clustertest test, using the Go test framework:
 
 ```
 func TestHelloWorld(t *testing.T) {
-	// use the "local" implementation
-	clusterImpl, _ := local.NewCluster()
-
-	// setup a BasicCluster which has a much richer API than barebones clusters
-	c := basic.New(clusterImpl)
+	// create a local cluster
+	cluster := basic.New(local.NewCluster())
 
 	// destroy the nodes and cluster after the test
-	t.Cleanup(func() { c.Cleanup() })
+	t.Cleanup(cluster.Cleanup)
 
 	// create a new node
-	node, _ := c.NewNode()
+	node := cluster.MustNewNode()
 
 	// determine the file path, which may differ depending on the implementation
 	path := filepath.Join(node.RootDir(), "hello")
 
 	// send a file to the node
-	node.SendFile(path, bytes.NewBuffer([]byte("Hello, world!")))
+	node.MustSendFile(path, bytes.NewBuffer([]byte("Hello, world!")))
 
 	// cat the file and verify stdout
 	stdout := &bytes.Buffer{}
-	exitCode, _ := node.Run(cluster.StartProcRequest{
+	exitCode := node.MustRun(cluster.StartProcRequest{
 		Command: "cat",
 		Args:    []string{path},
 		Stdout:  stdout,
@@ -59,14 +56,14 @@ func TestHelloWorld(t *testing.T) {
 This same code can be run against Docker nodes by merely switching the cluster implementation:
 
 ```
-// launch nodes with the "ubuntu" Docker image
-clusterImpl, _ := docker.NewCluster("ubuntu")
+// launch nodes with the default Docker image
+clusterImpl := docker.NewCluster()
 ```
 
 or with EC2 nodes in AWS:
 
 ```
-clusterImpl, _ := aws.NewCluster()
+clusterImpl := aws.NewCluster()
 ```
 
 # Example Code
