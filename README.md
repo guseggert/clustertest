@@ -16,6 +16,8 @@ Clustertest is designed for tests that:
 
 "Nodes" can be any process--local and unsandboxed, local Docker containers, remote Docker containers, remote cloud instances, k8s containers, etc. The implementation interface for a cluster is deliberately minimal, so that cluster implementations are easy to write, and you can choose the amount of complexity you'd like.
 
+Also since nodes do not require Docker/k8s/VMs/etc., you can run tests on bare metal machines and interact directly with e.g. networking hardware.
+
 Because implementations are interchangeable, you can write and run your test code locally with near-instantaneous feedback, then launch the same code on a cluster of 1,000 nodes in AWS for a giant performance test. 
 
 Clustertest also works naturally with standard test frameworks, tooling, IDE integration, etc.
