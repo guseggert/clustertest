@@ -3,6 +3,8 @@ package aws
 import (
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -115,12 +117,26 @@ func (c *Cluster) ensureLoaded() error {
 
 func fetchAMIID(sess *session.Session) (string, error) {
 	ssmClient := ssm.New(sess)
-	ssmKey := "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
-	res, err := ssmClient.GetParameters(&ssm.GetParametersInput{Names: []*string{&ssmKey}})
+	key := "/aws/service/ecs/optimized-ami/amazon-linux-2/recommended"
+	res, err := ssmClient.GetParameters(&ssm.GetParametersInput{Names: []*string{&key}})
 	if err != nil {
 		return "", fmt.Errorf("fetching AMI ID: %w", err)
 	}
-	return *res.Parameters[0].Value, nil
+	val := *res.Parameters[0].Value
+	m := map[string]interface{}{}
+	err = json.Unmarshal([]byte(val), &m)
+	if err != nil {
+		return "", fmt.Errorf("unmarshaling ECS AMI info from SSM: %w", err)
+	}
+	amiIDIface, ok := m["image_id"]
+	if !ok {
+		return "", fmt.Errorf("unable to find AMI ID in SSM: %w", err)
+	}
+	amiID, ok := amiIDIface.(string)
+	if !ok {
+		return "", errors.New("expected AMI ID from SSM to be a string")
+	}
+	return amiID, nil
 }
 
 // provideFileViaS3 uploads the file at the path to S3 with a random key, and returns the key.
