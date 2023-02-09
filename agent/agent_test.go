@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/guseggert/clustertest/cluster"
@@ -136,12 +137,15 @@ func TestCommand(t *testing.T) {
 	require.NoError(t, err)
 
 	cases := []struct {
-		name      string
-		cmd       string
-		args      []string
-		stdin     string
-		expStdout string
-		expStderr string
+		name                  string
+		cmd                   string
+		args                  []string
+		stdin                 string
+		stdinFileContents     string
+		expStdout             string
+		expStderr             string
+		expStdoutFileContents string
+		expStderrFileContents string
 	}{
 		{
 			name:      "happy case",
@@ -173,6 +177,32 @@ func TestCommand(t *testing.T) {
 			stdin:     "foo",
 			expStdout: "foo bar\n",
 		},
+		{
+			name:              "stdin from file",
+			cmd:               "cat",
+			stdinFileContents: "foo",
+			expStdout:         "foo",
+		},
+		{
+			name:                  "stdout to file",
+			cmd:                   "echo",
+			args:                  []string{"foo"},
+			expStdoutFileContents: "foo\n",
+		},
+		{
+			name:                  "stderr to file",
+			cmd:                   "sh",
+			args:                  []string{"-c", "printf foo 1>&2"},
+			expStderrFileContents: "foo",
+		},
+		{
+			name:                  "stdin from file, stdout and stderr to file",
+			cmd:                   "sh",
+			args:                  []string{"-c", "xargs printf; printf bar 1>&2"},
+			stdinFileContents:     "foo",
+			expStdoutFileContents: "foo",
+			expStderrFileContents: "bar",
+		},
 	}
 
 	for _, c := range cases {
@@ -186,6 +216,19 @@ func TestCommand(t *testing.T) {
 			if c.expStdout != "" {
 				req.Stdout = &noopWriteCloser{Writer: &stdoutBuf}
 			}
+			if c.expStdoutFileContents != "" {
+				f, err := os.CreateTemp("", "")
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				req.StdoutFile = f.Name()
+			}
+			if c.expStderrFileContents != "" {
+				f, err := os.CreateTemp("", "")
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				req.StderrFile = f.Name()
+			}
+
 			var stderrBuf bytes.Buffer
 			if c.expStderr != "" {
 				req.Stderr = &noopWriteCloser{Writer: &stderrBuf}
@@ -194,17 +237,36 @@ func TestCommand(t *testing.T) {
 			if c.stdin != "" {
 				req.Stdin = bytes.NewReader([]byte(c.stdin))
 			}
+			if c.stdinFileContents != "" {
+				f, err := os.CreateTemp("", "")
+				require.NoError(t, err)
+				_, err = io.Copy(f, bytes.NewReader([]byte(c.stdinFileContents)))
+				require.NoError(t, err)
+				t.Logf("writing stdin contents to %s", f.Name())
+				req.StdinFile = f.Name()
+				require.NoError(t, f.Close())
+			}
 
 			proc, err := client.StartProc(ctx, req)
 			require.NoError(t, err)
 
-			exitCode, err := proc.Wait(ctx)
+			res, err := proc.Wait(ctx)
 			require.NoError(t, err)
 
-			assert.Equal(t, 0, exitCode)
+			assert.Equal(t, 0, res.ExitCode)
 
 			if c.expStdout != "" {
 				assert.Equal(t, c.expStdout, stdoutBuf.String())
+			}
+			if c.expStdoutFileContents != "" {
+				b, err := os.ReadFile(req.StdoutFile)
+				require.NoError(t, err)
+				assert.Equal(t, c.expStdoutFileContents, string(b))
+			}
+			if c.expStderrFileContents != "" {
+				b, err := os.ReadFile(req.StderrFile)
+				require.NoError(t, err)
+				assert.Equal(t, c.expStderrFileContents, string(b))
 			}
 			if c.expStderr != "" {
 				assert.Equal(t, c.expStderr, stderrBuf.String())

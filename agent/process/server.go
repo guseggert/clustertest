@@ -51,11 +51,14 @@ type serverProcRunner struct {
 
 	cmd *exec.Cmd
 
-	stderr io.ReadCloser
-	stdout io.ReadCloser
+	stderrCloser io.Closer
+	stdoutCloser io.Closer
 
-	stdin   io.WriteCloser
-	stdinCh chan []byte
+	// stdinWriter is the writer for stdin, if piping stdin is enabled.
+	stdinWriter io.Writer
+	// stdinCloser is the closer for stdin (could be either a pipe or a file).
+	stdinCloser io.Closer
+	stdinCh     chan []byte
 
 	wg sync.WaitGroup
 
@@ -122,10 +125,11 @@ func (r *serverProcRunner) readMessages() {
 			r.close(websocket.StatusInternalError, err.Error())
 			return
 		}
-		if len(msg.Stdin) > 0 && !closedStdin {
-			r.stdinCh <- msg.Stdin
+		if len(msg.Stdin.B) > 0 && !closedStdin {
+			r.stdinCh <- msg.Stdin.B
 		}
-		if msg.StdinDone && !closedStdin {
+		if msg.Stdin.Done && !closedStdin {
+			fmt.Printf("stdin done\n")
 			close(r.stdinCh)
 			closedStdin = true
 		}
@@ -157,11 +161,22 @@ func (r *serverProcRunner) waitAndWriteResult(startTime time.Time) {
 		}
 	}
 
+	// ensure output streams are closed and ready to read before sending the message
+	// this is safe; it is guaranteed that no writes will happen after the process exits
+	if err := r.stderrCloser.Close(); err != nil {
+		r.log.Warnf("error closing stderr: %s", err)
+	}
+	if err := r.stdoutCloser.Close(); err != nil {
+		r.log.Warnf("error closing stdout: %s", err)
+	}
+
 	r.log.Debugf("process %d exited with error code %d, sending message", r.cmd.Process.Pid, r.cmd.ProcessState.ExitCode())
 	err = wsjson.Write(r.ctx, r.conn, procResponseMessage{
-		Exited:   true,
-		ExitCode: exitCode,
-		TimeMS:   timeMS,
+		Result: procResult{
+			Exited:   true,
+			ExitCode: exitCode,
+			TimeMS:   timeMS,
+		},
 	})
 	if err != nil {
 		r.log.Debugf("error sending exit code: %s", err)
@@ -176,33 +191,76 @@ func (r *serverProcRunner) readFirstMessageAndStart() (time.Time, error) {
 	}
 	r.log.Debugw("got first message", "Message", req)
 
-	cmd := exec.Command(req.Command, req.Args...)
-	cmd.Dir = req.WD
-	if len(req.Env) > 0 {
-		cmd.Env = append(os.Environ(), req.Env...)
+	cmd := exec.Command(req.Req.Command, req.Req.Args...)
+	cmd.Dir = req.Req.WD
+	if len(req.Req.Env) > 0 {
+		cmd.Env = append(os.Environ(), req.Req.Env...)
 	}
 
-	cmd.Stderr = &wsJSONWriter{
-		log:  r.log.Named("stderr_writer"),
-		ctx:  r.ctx,
-		conn: r.conn,
-		writeMsg: func(b []byte) any {
-			return procResponseMessage{Stderr: b}
-		},
+	if req.Req.Stdin.File != "" {
+		fmt.Printf("opening %s\n", req.Req.Stdin.File)
+		f, err := os.Open(req.Req.Stdin.File)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("opening stdin file %q: %w", req.Req.Stdin.File, err)
+		}
+		r.stdinCloser = f
+		r.stdinWriter = io.Discard // we don't write directly to stdin in this case, it happens internally in the stdlib
+		cmd.Stdin = f
+	} else if req.Req.Stdin.Discard {
+		r.stdinWriter = io.Discard
+		r.stdinCloser = &noopWriteCloser{io.Discard}
+	} else {
+		stdinR, stdinW := io.Pipe()
+		r.stdinWriter = stdinW
+		r.stdinCloser = stdinW
+		cmd.Stdin = stdinR
 	}
 
-	cmd.Stdout = &wsJSONWriter{
-		log:  r.log.Named("stdout_writer"),
-		ctx:  r.ctx,
-		conn: r.conn,
-		writeMsg: func(b []byte) any {
-			return procResponseMessage{Stdout: b}
-		},
+	if req.Req.Stdout.File != "" {
+		f, err := os.Create(req.Req.Stdout.File)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("opening stdout file %q: %w", req.Req.Stdout.File, err)
+		}
+		r.stdoutCloser = f
+		cmd.Stdout = f
+	} else if req.Req.Stdout.Discard {
+		r.stdoutCloser = &noopWriteCloser{io.Discard}
+		cmd.Stdout = io.Discard
+	} else {
+		w := &wsJSONWriter{
+			log:  r.log.Named("stdout_writer"),
+			ctx:  r.ctx,
+			conn: r.conn,
+			writeMsg: func(b []byte) any {
+				return procResponseMessage{Stdout: fdPayload{B: b}}
+			},
+		}
+		r.stdoutCloser = w
+		cmd.Stdout = w
 	}
 
-	stdinR, stdinW := io.Pipe()
-	cmd.Stdin = stdinR
-	r.stdin = stdinW
+	if req.Req.Stderr.File != "" {
+		f, err := os.Create(req.Req.Stderr.File)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("opening stderr file %q: %w", req.Req.Stderr.File, err)
+		}
+		r.stderrCloser = f
+		cmd.Stderr = f
+	} else if req.Req.Stderr.Discard {
+		r.stderrCloser = &noopWriteCloser{io.Discard}
+		cmd.Stderr = io.Discard
+	} else {
+		w := &wsJSONWriter{
+			log:  r.log.Named("stderr_writer"),
+			ctx:  r.ctx,
+			conn: r.conn,
+			writeMsg: func(b []byte) any {
+				return procResponseMessage{Stderr: fdPayload{B: b}}
+			},
+		}
+		r.stderrCloser = w
+		cmd.Stderr = w
+	}
 
 	r.cmd = cmd
 
@@ -211,9 +269,13 @@ func (r *serverProcRunner) readFirstMessageAndStart() (time.Time, error) {
 
 func (r *serverProcRunner) readStdin() {
 	defer r.wg.Done()
-	defer r.stdin.Close()
+	if r.stdinWriter == nil {
+		return
+	}
+
+	defer r.stdinCloser.Close()
 	for b := range r.stdinCh {
-		_, err := r.stdin.Write(b)
+		_, err := r.stdinWriter.Write(b)
 		if err != nil {
 			r.log.Debugf("stdin reader got write error: %s", err)
 			return

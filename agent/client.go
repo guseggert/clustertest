@@ -218,9 +218,18 @@ func (c *Client) StartProc(ctx context.Context, runReq clusteriface.StartProcReq
 		Args:    runReq.Args,
 		Env:     runReq.Env,
 		WD:      runReq.WD,
-		Stdin:   runReq.Stdin,
-		Stdout:  runReq.Stdout,
-		Stderr:  runReq.Stderr,
+		Stdin: process.InputFD{
+			Reader: runReq.Stdin,
+			File:   runReq.StdinFile,
+		},
+		Stdout: process.OutputFD{
+			Writer: runReq.Stdout,
+			File:   runReq.StdoutFile,
+		},
+		Stderr: process.OutputFD{
+			Writer: runReq.Stderr,
+			File:   runReq.StderrFile,
+		},
 	})
 }
 

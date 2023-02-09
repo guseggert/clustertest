@@ -22,14 +22,28 @@ type Client struct {
 	Logger     *zap.SugaredLogger
 }
 
+type InputFD struct {
+	// Reader is an input reader that returns bytes that should be sent to the input stream.
+	// Note for stdin that the process will not exit until this reader returns an error or io.EOF.
+	// If you signal the process and expect it to exit, then you should also return io.EOF from thi
+	Reader io.Reader
+	File   string
+}
+
+type OutputFD struct {
+	Writer io.Writer
+	File   string
+}
+
 type StartProcRequest struct {
 	Command string
 	Args    []string
 	Env     []string
 	WD      string
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
+
+	Stdin  InputFD
+	Stdout OutputFD
+	Stderr OutputFD
 }
 
 type Process struct {
@@ -66,18 +80,18 @@ func (c *Client) StartProc(ctx context.Context, req StartProcRequest) (*Process,
 
 		stdout: io.Discard,
 		stderr: io.Discard,
-		stdin:  req.Stdin,
+		stdin:  req.Stdin.Reader,
 
 		stdoutCh: make(chan []byte),
 		stderrCh: make(chan []byte),
 
 		resultCh: make(chan cmdResult, 1),
 	}
-	if req.Stdout != nil {
-		runner.stdout = req.Stdout
+	if req.Stdout.Writer != nil {
+		runner.stdout = req.Stdout.Writer
 	}
-	if req.Stderr != nil {
-		runner.stderr = req.Stderr
+	if req.Stderr.Writer != nil {
+		runner.stderr = req.Stderr.Writer
 	}
 
 	err = runner.run()
@@ -215,20 +229,20 @@ func (r *clientProcRunner) readMessages() {
 			r.close(websocket.StatusInternalError, err.Error())
 			return
 		}
-		if len(msg.Stderr) > 0 && !closedStderr {
-			r.stderrCh <- msg.Stderr
+		if len(msg.Stderr.B) > 0 && !closedStderr {
+			r.stderrCh <- msg.Stderr.B
 		}
-		if msg.StderrDone {
+		if msg.Stderr.Done {
 			closeStderr()
 		}
-		if len(msg.Stdout) > 0 && !closedStdout {
-			r.stdoutCh <- msg.Stdout
+		if len(msg.Stdout.B) > 0 && !closedStdout {
+			r.stdoutCh <- msg.Stdout.B
 		}
-		if msg.StdoutDone && !closedStdout {
+		if msg.Stdout.Done && !closedStdout {
 			closeStdout()
 		}
-		if msg.Exited {
-			r.resultCh <- cmdResult{code: msg.ExitCode, timeMS: msg.TimeMS}
+		if msg.Result.Exited {
+			r.resultCh <- cmdResult{code: msg.Result.ExitCode, timeMS: msg.Result.TimeMS}
 			r.close(websocket.StatusNormalClosure, "")
 			return
 		}
@@ -237,33 +251,45 @@ func (r *clientProcRunner) readMessages() {
 
 func (r *clientProcRunner) writeFirstMessage() error {
 	return wsjson.Write(r.ctx, r.conn, procRequestMessage{
-		Command: r.req.Command,
-		Args:    r.req.Args,
-		Env:     r.req.Env,
-		WD:      r.req.WD,
+		Req: &procReq{
+			Command: r.req.Command,
+			Args:    r.req.Args,
+			Env:     r.req.Env,
+			WD:      r.req.WD,
+			Stdin: fdConfig{
+				File:    r.req.Stdin.File,
+				Discard: r.req.Stdin.Reader == nil && r.req.Stdin.File == "",
+			},
+			Stdout: fdConfig{
+				File:    r.req.Stdout.File,
+				Discard: r.req.Stdout.Writer == nil,
+			},
+			Stderr: fdConfig{
+				File:    r.req.Stderr.File,
+				Discard: r.req.Stderr.Writer == nil,
+			},
+		},
 	})
 }
 
 func (r *clientProcRunner) writeStdin() {
 	defer r.wg.Done()
+	if r.stdin == nil {
+		return
+	}
+
 	writer := &wsJSONWriter{
 		log:  r.log.Named("stdin_writer"),
 		ctx:  r.ctx,
 		conn: r.conn,
 		writeMsg: func(b []byte) any {
-			return procRequestMessage{Stdin: b}
+			return procRequestMessage{Stdin: fdPayload{B: b}}
 		},
 		closeMsg: func() any {
-			return procRequestMessage{StdinDone: true}
+			return procRequestMessage{Stdin: fdPayload{Done: true}}
 		},
 	}
 	defer writer.Close()
-
-	// caller supplied to stdin, this is fine, we just close it
-	if r.stdin == nil {
-		return
-	}
-
 	_, err := io.Copy(writer, r.stdin)
 	r.log.Debugw("done copying stdin", "Error", err)
 }

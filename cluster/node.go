@@ -28,12 +28,21 @@ type StartProcRequest struct {
 	// WD is the working directory of the process.
 	// If unspecified, this is implementation-defined.
 	WD string
+
 	// Stdin is a reader which, when specified, is sent to the process's stdin.
 	Stdin io.Reader
+	// StdinFile is a server-side file which should be read into stdin. If specified, Stdin is ignored.
+	StdinFile string
+
 	// Stdout is a writer which, when specified, receives the stdout of the process.
 	Stdout io.Writer
+	// StdoutFile is a server-side file to which stdout should be written. If specified, Stdout is ignored.
+	StdoutFile string
+
 	// Stderr is a writer which, when specified, receives the stderr of the process.
 	Stderr io.Writer
+	// StderrFile is a server-side file to which stderr should be written. If specified, Stderr is ignored.
+	StderrFile string
 }
 
 // Node is generally a host or container, and is a member of a cluster.

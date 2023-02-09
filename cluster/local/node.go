@@ -44,6 +44,26 @@ func (n *Node) StartProc(ctx context.Context, req clusteriface.StartProcRequest)
 	cmd.Stderr = req.Stderr
 	cmd.Dir = req.WD
 
+	closeStdoutFile := func() error { return nil }
+	closeStderrFile := func() error { return nil }
+	if req.StdoutFile != "" {
+		f, err := os.Create(req.StdoutFile)
+		if err != nil {
+			return nil, fmt.Errorf("creating stdout file %q: %w", req.StdoutFile, err)
+		}
+		cmd.Stdout = f
+		closeStdoutFile = f.Close
+	}
+	if req.StderrFile != "" {
+		f, err := os.Create(req.StderrFile)
+		if err != nil {
+			closeStdoutFile()
+			return nil, fmt.Errorf("creating stderr file %q: %w", req.StderrFile, err)
+		}
+		cmd.Stderr = f
+		closeStderrFile = f.Close
+	}
+
 	start := time.Now()
 	err := cmd.Start()
 	if err != nil {
@@ -59,6 +79,10 @@ func (n *Node) StartProc(ctx context.Context, req clusteriface.StartProcRequest)
 
 		err := cmd.Wait()
 		timeMS := time.Since(start).Milliseconds()
+
+		defer closeStderrFile()
+		defer closeStdoutFile()
+
 		close(procExitedChan)
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {

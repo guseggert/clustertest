@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"io"
 
 	"go.uber.org/zap"
 	"nhooyr.io/websocket"
@@ -57,4 +58,12 @@ func (w *wsJSONWriter) Close() error {
 	}
 	w.log.Debugw("closed writer", "Error", err, "SentClose", sendClose)
 	return err
+}
+
+type noopWriteCloser struct {
+	io.Writer
+}
+
+func (c *noopWriteCloser) Close() error {
+	return nil
 }
