@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/guseggert/clustertest/cluster"
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -29,6 +30,37 @@ func init() {
 	}
 
 	log = l.Sugar()
+}
+
+func TestNegativeAuthz(t *testing.T) {
+	// ensure that unauthorized clients are rejected
+	serverCerts, err := GenerateCerts()
+	require.NoError(t, err)
+	agent, err := NewNodeAgent(
+		serverCerts.CA.CertPEMBytes,
+		serverCerts.Server.CertPEMBytes,
+		serverCerts.Server.KeyPEMBytes,
+		WithListenAddr("127.0.0.1:9998"),
+	)
+	require.NoError(t, err)
+
+	go agent.Run()
+	defer func() {
+		require.NoError(t, agent.Stop())
+	}()
+
+	// generate some client certs with the same CA but with keys actually signed by some other CA
+	// which should fail server-side validation
+	clientCerts, err := GenerateCerts()
+	require.NoError(t, err)
+	clientCerts.CA = serverCerts.CA
+	client, err := NewClient(log, clientCerts, "127.0.0.1", 9998, WithCustomizeRetryableClient(func(r *retryablehttp.Client) {
+		r.RetryMax = 0
+	}))
+	require.NoError(t, err)
+
+	err = client.SendHeartbeat(context.Background())
+	require.ErrorContains(t, err, "remote error: tls: bad certificate")
 }
 
 func TestPostFile(t *testing.T) {

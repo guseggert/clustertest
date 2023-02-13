@@ -23,14 +23,15 @@ import (
 )
 
 type Client struct {
-	Logger *zap.SugaredLogger
+	Logger     *zap.SugaredLogger
+	HTTPClient *http.Client
 
-	host            string
-	tlsClientConfig *tls.Config
-	dialCtx         func(ctx context.Context, network, addr string) (net.Conn, error)
-	baseURL         string
-	httpClient      *http.Client
-	commandClient   *process.Client
+	host                     string
+	tlsClientConfig          *tls.Config
+	dialCtx                  func(ctx context.Context, network, addr string) (net.Conn, error)
+	baseURL                  string
+	customizeRetryableClient func(*retryablehttp.Client)
+	commandClient            *process.Client
 
 	waitInterval time.Duration
 
@@ -50,6 +51,12 @@ func WithClientWaitInterval(d time.Duration) ClientOption {
 func WithClientLogger(l *zap.Logger) ClientOption {
 	return func(c *Client) {
 		c.Logger = l.Named("nodeagentclient").Sugar()
+	}
+}
+
+func WithCustomizeRetryableClient(f func(r *retryablehttp.Client)) ClientOption {
+	return func(c *Client) {
+		c.customizeRetryableClient = f
 	}
 }
 
@@ -77,6 +84,23 @@ func NewClient(log *zap.SugaredLogger, certs *Certs, ipAddr string, port int, op
 		return nil, fmt.Errorf("building client TLS config: %w", err)
 	}
 
+	baseURL := fmt.Sprintf("https://nodeagent:%d", port)
+	commandURL := baseURL + "/command"
+
+	c := &Client{
+		Logger:          log.Named("nodeagent_client"),
+		host:            "nodeagent",
+		baseURL:         baseURL,
+		tlsClientConfig: tlsConfig,
+		dialCtx:         dialCtx,
+		waitInterval:    100 * time.Millisecond,
+		stopHeartbeat:   make(chan struct{}),
+	}
+
+	for _, opt := range opts {
+		opt(c)
+	}
+
 	retryClient := retryablehttp.NewClient()
 	retryClient.HTTPClient = &http.Client{
 		Transport: &http.Transport{
@@ -91,29 +115,15 @@ func NewClient(log *zap.SugaredLogger, certs *Certs, ipAddr string, port int, op
 	retryClient.RetryMax = 10
 	retryClient.Logger = &logAdapter{SugaredLogger: log}
 
-	httpClient := retryClient.StandardClient()
-
-	baseURL := fmt.Sprintf("https://nodeagent:%d", port)
-	commandURL := baseURL + "/command"
-
-	c := &Client{
-		Logger:          log.Named("nodeagent_client"),
-		host:            "nodeagent",
-		baseURL:         baseURL,
-		httpClient:      httpClient,
-		tlsClientConfig: tlsConfig,
-		dialCtx:         dialCtx,
-		commandClient: &process.Client{
-			HTTPClient: httpClient,
-			URL:        commandURL,
-			Logger:     log.Named("nodeagent_command_client"),
-		},
-		waitInterval:  100 * time.Millisecond,
-		stopHeartbeat: make(chan struct{}),
+	if c.customizeRetryableClient != nil {
+		c.customizeRetryableClient(retryClient)
 	}
 
-	for _, opt := range opts {
-		opt(c)
+	c.HTTPClient = retryClient.StandardClient()
+	c.commandClient = &process.Client{
+		HTTPClient: c.HTTPClient,
+		URL:        commandURL,
+		Logger:     log.Named("nodeagent_command_client"),
 	}
 
 	return c, nil
@@ -135,7 +145,7 @@ func (c *Client) SendHeartbeat(ctx context.Context) error {
 
 	c.prepReq(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("HTTP error: %w", err)
 	}
@@ -159,7 +169,7 @@ func (c *Client) SendFile(ctx context.Context, filePath string, contents io.Read
 
 	c.prepReq(httpReq)
 
-	httpResp, err := c.httpClient.Do(httpReq)
+	httpResp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("sending file over HTTP: %w", err)
 	}
@@ -190,7 +200,7 @@ func (c *Client) ReadFile(ctx context.Context, filePath string) (io.ReadCloser, 
 
 	c.prepReq(httpReq)
 
-	httpResp, err := c.httpClient.Do(httpReq)
+	httpResp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("reading file over HTTP: %w", err)
 	}
@@ -250,7 +260,7 @@ func (c *Client) Fetch(ctx context.Context, url, path string) error {
 
 	c.prepReq(httpReq)
 
-	httpResp, err := c.httpClient.Do(httpReq)
+	httpResp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
 		return err
 	}
@@ -278,7 +288,7 @@ func (c *Client) DialContext(ctx context.Context, network, addr string) (net.Con
 	u := c.baseURL + fmt.Sprintf("/connect/%s/%s", network, addr)
 
 	c.Logger.Debugw("dialing WebSocket", "URL", u)
-	wsConn, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPClient: c.httpClient})
+	wsConn, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPClient: c.HTTPClient})
 	if err != nil {
 		return nil, fmt.Errorf("dialing WebSocket conn: %w", err)
 	}
