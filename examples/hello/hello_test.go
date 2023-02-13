@@ -11,6 +11,7 @@ import (
 	"github.com/guseggert/clustertest/cluster/basic"
 	"github.com/guseggert/clustertest/cluster/docker"
 	"github.com/guseggert/clustertest/cluster/local"
+	"github.com/guseggert/clustertest/internal/test"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/errgroup"
 )
@@ -18,8 +19,11 @@ import (
 // TestHello creates a multi-node cluster, writes a test file on each node,
 // and then cats the contents back to the test runner for verification.
 func TestHello(t *testing.T) {
-	run := func(t *testing.T, name string, impl cluster.Cluster) {
+	run := func(t *testing.T, name string, impl cluster.Cluster, isInteg bool) {
 		t.Run(name, func(t *testing.T) {
+			if isInteg {
+				test.Integration(t)
+			}
 			t.Parallel()
 
 			// Create the cluster.
@@ -65,7 +69,7 @@ func TestHello(t *testing.T) {
 			}
 		})
 	}
-	run(t, "local cluster", local.NewCluster())
-	run(t, "Docker cluster", docker.MustNewCluster())
-	run(t, "AWS cluster", aws.NewCluster())
+	run(t, "local cluster", local.NewCluster(), false)
+	run(t, "Docker cluster", docker.MustNewCluster(), true)
+	run(t, "AWS cluster", aws.NewCluster(), true)
 }

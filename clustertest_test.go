@@ -11,13 +11,17 @@ import (
 	"github.com/guseggert/clustertest/cluster/basic"
 	"github.com/guseggert/clustertest/cluster/docker"
 	"github.com/guseggert/clustertest/cluster/local"
+	"github.com/guseggert/clustertest/internal/test"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/errgroup"
 )
 
 func TestStdoutFile(t *testing.T) {
-	run := func(t *testing.T, name string, impl cluster.Cluster) {
+	run := func(t *testing.T, name string, impl cluster.Cluster, isInteg bool) {
 		t.Run(name, func(t *testing.T) {
+			if isInteg {
+				test.Integration(t)
+			}
 			t.Parallel()
 
 			c := basic.New(impl)
@@ -68,6 +72,6 @@ func TestStdoutFile(t *testing.T) {
 			}
 		})
 	}
-	run(t, "local cluster", local.NewCluster())
-	run(t, "Docker cluster", docker.MustNewCluster())
+	run(t, "local cluster", local.NewCluster(), false)
+	run(t, "Docker cluster", docker.MustNewCluster(), true)
 }
