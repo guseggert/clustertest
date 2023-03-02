@@ -13,12 +13,14 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/guseggert/clustertest/agent"
 	clusteriface "github.com/guseggert/clustertest/cluster"
 	"github.com/guseggert/clustertest/internal/files"
 	"github.com/guseggert/clustertest/internal/net"
+	specs "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
 
@@ -36,17 +38,26 @@ func randString(n int) string {
 	return string(b)
 }
 
+type CreateContainerConfig struct {
+	Name             string
+	ContainerConfig  *container.Config
+	HostConfig       *container.HostConfig
+	NetworkingConfig *network.NetworkingConfig
+	Platform         *specs.Platform
+}
+
 // Cluster is a local Cluster that runs nodes as Docker containers.
 // The underlying host must have a Docker daemon running.
 // This supports standard environment variables for configuring the Docker client (DOCKER_HOST etc.).
 type Cluster struct {
-	Log              *zap.SugaredLogger
-	Certs            *agent.Certs
-	NodeAgentBin     string
-	BaseImage        string
-	ContainerPrefix  string
-	DockerClient     *client.Client
-	RemoveContainers bool
+	Log                   *zap.SugaredLogger
+	Certs                 *agent.Certs
+	NodeAgentBin          string
+	BaseImage             string
+	ContainerPrefix       string
+	DockerClient          *client.Client
+	RemoveContainers      bool
+	CreateContainerConfig func(*CreateContainerConfig) error
 
 	nodesMut      sync.Mutex
 	Nodes         []*Node
@@ -67,6 +78,11 @@ func (c *Cluster) WithNodeAgentBin(p string) *Cluster {
 
 func (c *Cluster) WithBaseImage(img string) *Cluster {
 	c.BaseImage = img
+	return c
+}
+
+func (c *Cluster) WithCreateContainerConfig(f func(*CreateContainerConfig) error) *Cluster {
+	c.CreateContainerConfig = f
 	return c
 }
 
@@ -158,9 +174,8 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 		certPEMEncoded := base64.StdEncoding.EncodeToString(c.Certs.Server.CertPEMBytes)
 		keyPEMEncoded := base64.StdEncoding.EncodeToString(c.Certs.Server.KeyPEMBytes)
 
-		createResp, err := c.DockerClient.ContainerCreate(
-			ctx,
-			&container.Config{
+		ccConfig := CreateContainerConfig{
+			ContainerConfig: &container.Config{
 				Image: c.BaseImage,
 				Entrypoint: []string{"/nodeagent",
 					"--ca-cert-pem", caCertPEMEncoded,
@@ -171,13 +186,27 @@ func (c *Cluster) NewNodes(ctx context.Context, n int) (clusteriface.Nodes, erro
 				},
 				ExposedPorts: nat.PortSet{"8080": struct{}{}},
 			},
-			&container.HostConfig{
+			HostConfig: &container.HostConfig{
 				Binds:        []string{fmt.Sprintf("%s:/nodeagent", c.NodeAgentBin)},
 				PortBindings: nat.PortMap{"8080": []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: strconv.Itoa(hostPort)}}},
 			},
-			nil,
-			nil,
-			containerName,
+			Name: containerName,
+		}
+
+		if c.CreateContainerConfig != nil {
+			err := c.CreateContainerConfig(&ccConfig)
+			if err != nil {
+				return nil, fmt.Errorf("calling CreateContainerConfig function: %w", err)
+			}
+		}
+
+		createResp, err := c.DockerClient.ContainerCreate(
+			ctx,
+			ccConfig.ContainerConfig,
+			ccConfig.HostConfig,
+			ccConfig.NetworkingConfig,
+			ccConfig.Platform,
+			ccConfig.Name,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("creating Docker container: %w", err)
